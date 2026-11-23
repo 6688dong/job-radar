@@ -7,6 +7,7 @@ import json
 import os
 import re
 import smtplib
+import socket
 import ssl
 import sys
 import time
@@ -44,7 +45,7 @@ OUTSOURCE_COMPANY_KEYWORDS = (
     "首信科技", "百信银行", "深演智能",
     "亚信", "浩鲸", "思特奇", "天源迪科", "东方国信", "直真科技", "亿阳信通",
     "德科", "外企德科", "fesco", "中智", "科锐", "万宝盛华", "任仕达",
-    "前锦", "易才", "人瑞", "金柚", "英格玛",
+    "前锦", "易才", "人瑞", "金柚", "英格玛", "clps",
 )
 OUTSOURCE_CONTRACT_PHRASES = (
     "签订外包", "劳务派遣合同", "华为od", "od岗", "属于外包", "人力外包岗",
@@ -94,14 +95,16 @@ LIST_URL_BLACKLIST = (
 )
 
 # 每日 6 次 Google 查询（每月约 180 次，安全控制在 SerpApi 免费 250 次额度内）
-# 每条查询控制在 20 个词以内；三个来源分开查：通用关键词、飞书/Moka/国聘企业直招源、猎聘/智联/BOSS 详情页
+# 每项独立配置 tbs：锁定详情页路径的查询不限时间（智联/国聘详情页在 Google 无时间戳，qdr:m 会误杀 90% 在招页，下架页靠正文检测拦截）；
+# 宽泛搜索保留 qdr:m 防陈旧列表页。每条查询控制在 20 个词以内，每条只放 1～2 个 site:。
+# SEARCH_PLAN 每项为 (方向, 查询词, tbs)，tbs 为 None 表示不限时间
 SEARCH_PLAN = [
-    ("大数据/系统运维", '("大数据运维" OR "数据平台运维" OR "Hadoop运维" OR "Linux运维") ("北京" OR "天津") (招聘 OR 直招) -软通 -中软'),
-    ("大数据/系统运维", '(site:jobs.feishu.cn OR site:app.mokahr.com OR site:iguopin.com/job/detail) ("大数据运维" OR "数据平台运维") ("北京" OR "天津")'),
-    ("大数据/系统运维", '(site:liepin.com/job/ OR site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:zhipin.com/job_detail/) ("大数据运维" OR "数据平台运维") ("北京" OR "天津")'),
-    ("AI部署/交付运维", '("私有化部署" OR "大模型交付" OR "AI交付工程师" OR "大模型运维" OR "vLLM" OR "Dify" OR "Ollama") ("北京" OR "天津") 招聘 -算法工程师'),
-    ("AI部署/交付运维", '(site:jobs.feishu.cn OR site:app.mokahr.com OR site:iguopin.com/job/detail) ("私有化部署" OR "AI交付" OR "大模型运维") ("北京" OR "天津")'),
-    ("AI部署/交付运维", '(site:liepin.com/job/ OR site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:zhipin.com/job_detail/) ("私有化部署" OR "AI交付" OR "大模型运维") ("北京" OR "天津")'),
+    ("大数据/系统运维", '(site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail) (大数据 OR Hadoop OR Kafka OR 数据平台) 运维 ("北京" OR "天津")', None),
+    ("大数据/系统运维", '(site:liepin.com/job OR site:iguopin.com/job/detail) (大数据 OR Hadoop OR Kafka OR 数据平台) 运维 ("北京" OR "天津")', None),
+    ("大数据/系统运维", '(site:zhipin.com/job_detail OR 直招 OR 招聘) ("大数据运维" OR "数据平台运维" OR "Hadoop运维") ("北京" OR "天津")', "qdr:m"),
+    ("AI部署/交付运维", '("私有化部署" OR "大模型交付" OR "AI交付工程师" OR "大模型运维" OR "vLLM" OR "Dify" OR "Ollama") ("北京" OR "天津") 招聘 -算法工程师', "qdr:m"),
+    ("AI部署/交付运维", '(site:jobs.feishu.cn OR site:app.mokahr.com OR site:iguopin.com/job/detail) ("私有化部署" OR "AI交付" OR "大模型运维") ("北京" OR "天津")', None),
+    ("AI部署/交付运维", '(site:liepin.com/job/ OR site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:zhipin.com/job_detail/) ("私有化部署" OR "AI交付" OR "大模型运维") ("北京" OR "天津")', None),
 ]
 
 
@@ -193,21 +196,25 @@ def resolve_gemini_models(api_key):
     return ordered
 
 
-def search_serpapi(serpapi_key, query):
+def search_serpapi(serpapi_key, query, tbs="qdr:m"):
+    """tbs=None 表示不限时间（详情页路径查询专用）；Google 无结果时正常返回空列表，不抛异常"""
     params = {
         "engine": "google",
         "q": query,
         "hl": "zh-CN",
         "gl": "cn",
-        "tbs": "qdr:m",  # 首次建库放宽到最近一个月活跃页：HR 每天刷新职位，但 URL 可能是两三周前生成的；后续每天有 seen_jobs.json 去重，不会重复推
         "num": "10",
         "api_key": serpapi_key,
     }
+    if tbs:
+        params["tbs"] = tbs
     url = "https://serpapi.com/search.json?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, method="GET")
     with urllib.request.urlopen(req, timeout=35) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     if "error" in data:
+        if "hasn't returned any results" in str(data["error"]):
+            return []
         raise RuntimeError("SerpApi 返回错误: {}".format(data["error"]))
     return data.get("organic_results") or []
 
@@ -286,10 +293,10 @@ def collect_verified_candidates(serpapi_key):
     grouped = {"大数据/系统运维": [], "AI部署/交付运维": []}
     seen_urls = set()
 
-    for track, q in SEARCH_PLAN:
+    for track, q, tbs in SEARCH_PLAN:
         log("SerpApi 检索 [{}]: {}".format(track, q[:48]))
         try:
-            results = search_serpapi(serpapi_key, q)
+            results = search_serpapi(serpapi_key, q, tbs)
             log("SerpApi 检索 [{}] 返回 {} 条".format(track, len(results)))
         except Exception as e:
             log("SerpApi 单条检索异常: {}".format(e))
@@ -340,11 +347,21 @@ def collect_verified_candidates(serpapi_key):
     return verified_grouped
 
 
-def call_gemini_pure_text(api_key, model_name, prompt_text, max_retries=3):
-    url = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent".format(model_name)
+def call_gemini_pure_text(api_key, model_name, prompt_text, max_retries=2):
+    """流式调用 :streamGenerateContent?alt=sse，逐行拼 data: 分片。
+
+    3.8-flash 默认开深度思考，非流式 :generateContent 要等全部思考+JSON 写完才回第一个字节，
+    很容易撞上读取超时；流式接口按两次数据块之间的空闲时间算超时，思考期间每 1-2 秒就有分片，
+    连接不会空闲超时。Gemini 3 系列思考档位用 thinkingLevel=LOW，筛 JD 不需要复杂推演。
+    重试策略：超时不重试、立即降级（别白扣每天 20 次额度）；429/5xx 最多重试 1 次。
+    """
+    url = "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse".format(model_name)
+    generation_config = {"temperature": 0.1}
+    if model_name.lower().startswith("gemini-3"):
+        generation_config["thinkingConfig"] = {"thinkingLevel": "LOW"}
     payload = {
         "contents": [{"parts": [{"text": prompt_text}]}],
-        "generationConfig": {"temperature": 0.1},
+        "generationConfig": generation_config,
     }
     body_bytes = json.dumps(payload).encode("utf-8")
 
@@ -357,20 +374,44 @@ def call_gemini_pure_text(api_key, model_name, prompt_text, max_retries=3):
         )
         try:
             with urllib.request.urlopen(req, timeout=90) as resp:
-                api_resp = json.loads(resp.read().decode("utf-8"))
-                cands = api_resp.get("candidates") or []
-                if not cands:
-                    return ""
-                parts = (cands[0].get("content") or {}).get("parts") or []
-                return "".join(str(p.get("text") or "") for p in parts if not p.get("thought")).strip()
+                text_parts = []
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8", errors="ignore").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        chunk = json.loads(data)
+                    except ValueError:
+                        continue
+                    for cand in chunk.get("candidates") or []:
+                        content = cand.get("content") or {}
+                        for p in content.get("parts") or []:
+                            if not p.get("thought") and p.get("text"):
+                                text_parts.append(str(p["text"]))
+                return "".join(text_parts).strip()
         except urllib.error.HTTPError as e:
             err = e.read().decode("utf-8", errors="ignore")
+            if e.code == 400 and "thinkingConfig" in generation_config and attempt == 1:
+                # 某子型号不支持 thinkingLevel，去掉该字段再试一次
+                log("模型 {} 不支持 thinkingLevel，去掉后重试".format(model_name))
+                generation_config.pop("thinkingConfig", None)
+                payload["generationConfig"] = generation_config
+                body_bytes = json.dumps(payload).encode("utf-8")
+                continue
             if e.code in (429, 500, 502, 503, 504) and attempt < max_retries:
-                wait_s = 25 * attempt  # 3.8-flash 高峰期 503 是暂时的：等 25s、50s 再降级，别急着切走
-                log("Gemini HTTP {}，等待 {}s 重试...".format(e.code, wait_s))
-                time.sleep(wait_s)
+                log("Gemini HTTP {}，等待 10s 重试...".format(e.code))
+                time.sleep(10)
                 continue
             raise RuntimeError("Gemini 调用失败 (HTTP {}): {}".format(e.code, err[:400]))
+        except (socket.timeout, TimeoutError) as e:
+            raise RuntimeError("Gemini 调用超时: {}".format(e))
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, (socket.timeout, TimeoutError)):
+                raise RuntimeError("Gemini 调用超时: {}".format(e.reason))
+            raise RuntimeError("Gemini 调用失败: {}".format(e))
 
 
 def extract_json_array(raw_text):
@@ -435,20 +476,10 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
 - 只能基于提供的候选数据提取，严禁编造公司名、薪资或要求。
 - 如果 `webpage_excerpt` 为空（登录墙导致没读到正文），优先从 `search_title`/`snippet` 的企业署名里提取真实公司名；只有标题和摘要里完全只有平台名或“某知名企业”且无任何真实字号时，才丢弃该条。
 - 如果 `verify_status` 为 "搜索摘要核验" 且摘要里没写薪资或细节，必须如实把 `salary` 填为 "未知"，并在 `gap` 中注明 "正文受登录墙限制，需点开核对完整JD"。
-- 只输出合法的 JSON 数组，不要任何多余解释：
-[
-  {{
-    "source_id": 1,
-    "title": "清洗后的准确岗位名称",
-    "company": "准确公司名称（正文为空时可从标题/摘要的企业署名提取；只有标题和摘要里完全只有平台名或“某知名企业”且无任何真实字号时才丢弃该条）",
-    "city": "北京 或 天津 或 远程",
-    "salary": "真实薪资范围 或 未知",
-    "date": "发布时间如 2026-11-22 或 近期 或 未知",
-    "match": "一句话说明与求职者画像的匹配点",
-    "gap": "一句话说明岗位要求中求职者尚不具备的技能差距"
-  }}
-]
-若全部不符合，仅输出 []。
+- 只输出合法的 JSON 数组，不要任何多余解释。数组必须包含输入中每一个 source_id 的判定，严禁遗漏任何一条（拿不准也不许跳过）：
+  - 若丢弃：{{"source_id": 1, "decision": "drop", "reason": "一句话具体原因（20字内，如：命中外包公司软通、地点不在北京天津、正文为空且标题无真实公司名、偏Java开发）"}}
+  - 若保留：{{"source_id": 2, "decision": "keep", "title": "原帖准确岗位名称（不要把标题和正文里的不同叫法拼在一起）", "company": "准确公司名称（正文为空时可从标题/摘要的企业署名提取；只有标题和摘要里完全只有平台名或“某知名企业”且无任何真实字号时才丢弃该条）", "city": "北京 或 天津 或 远程", "salary": "真实薪资范围 或 未知", "date": "发布时间如 2026-11-22 或 近期 或 未知", "match": "一句话说明与求职者画像的匹配点", "gap": "一句话说明岗位要求中求职者尚不具备的技能差距"}}
+- 若全部不符合，也要逐条输出 drop 判定，不要只输出 []。
 
 候选数据如下：
 {data_json}
@@ -457,6 +488,12 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
         track=track_label,
         data_json=json.dumps(indexed_input, ensure_ascii=False, indent=2),
     )
+
+    # 预检快照日志：进模型前看一眼每条候选的核验状态和正文字数，
+    # 一眼看穿是不是机房 IP 被招聘站滑块拦成了 0 字正文
+    for i, c in enumerate(candidates, 1):
+        log("候选 #{} verify={} 正文{}字 | {}".format(
+            i, c.get("verify_status"), len(c.get("page_text") or ""), c["title"][:40]))
 
     raw_reply = ""
     used_model = None
@@ -484,17 +521,24 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
             continue
 
         orig = id_map[sid]
+        # 丢弃审计日志：模型必须对每条候选输出判定，drop 的原因打进日志，黑盒才能打开
+        if item.get("decision") == "drop":
+            log("[DROP #{}] 原因: {} | 原标题: {} | {}".format(
+                sid, str(item.get("reason") or "未说明")[:40], orig["title"][:40], orig["url"][:60]))
+            continue
         title = str(item.get("title") or "").strip()
         company = str(item.get("company") or "").strip()
         city = str(item.get("city") or "").strip()
         if not title or not company or company in ("未知", "某公司", "某知名企业", "猎头代招"):
+            log("[DROP #{}] 原因: 标题或公司名缺失 | 原标题: {}".format(sid, orig["title"][:40]))
             continue
         # 平台名冒充公司名：代码层硬性拦截，查不到真实企业名一律丢弃
         hit_platform = next((kw for kw in PLATFORM_COMPANY_BLACKLIST if kw in company), None)
         if hit_platform:
-            log("Python 终审拦截平台名冒充公司名('{}'): {} | {}".format(hit_platform, company, title))
+            log("[DROP #{}] 原因: Python 终审拦截平台名冒充公司名('{}') | {} | {}".format(sid, hit_platform, company, title))
             continue
         if not any(c in city for c in ("北京", "天津", "远程")):
+            log("[DROP #{}] 原因: 城市不在北京/天津/远程 ({}) | {} | {}".format(sid, city, company, title))
             continue
 
         check_str = strip_safe_words("{} {} {} {}".format(
@@ -502,9 +546,10 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
         ))
         hit_out = next((kw for kw in OUTSOURCE_KEYWORDS if kw in check_str), None)
         if hit_out:
-            log("Python 终审拦截外包词('{}'): {} | {}".format(hit_out, company, title))
+            log("[DROP #{}] 原因: Python 终审拦截外包词('{}') | {} | {}".format(sid, hit_out, company, title))
             continue
         if any(kw in title.lower() for kw in EXCLUDED_TITLE_KEYWORDS):
+            log("[DROP #{}] 原因: 标题命中排除词 | {} | {}".format(sid, company, title))
             continue
 
         final_jobs.append({
