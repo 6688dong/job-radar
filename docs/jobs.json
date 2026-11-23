@@ -1,23 +1,9 @@
 {
   "updated_at": "2026-11-23 13:56:45",
   "latest_date": "2026-11-23",
-  "today_new_count": 8,
+  "today_new_count": 7,
   "model": "gemini-3.5-flash-lite",
   "jobs": [
-    {
-      "title": "基础设施运维",
-      "company": "天津宝石花石油技术有限公司",
-      "city": "天津",
-      "salary": "5000-8000元",
-      "date": "未知",
-      "url": "https://jobs.zhaopin.com/CCL1514154970J40888130310.htm",
-      "verify_status": "搜索摘要核验",
-      "track": "大数据/系统运维",
-      "match": "符合天津地域及系统运维/基础设施运维背景，企业直招",
-      "gap": "偏向基础IT和系统运维，大数据深度运维经验可能有所欠缺",
-      "added_date": "2026-11-23",
-      "id": "天津宝石花石油技术有限公司|基础设施运维|天津"
-    },
     {
       "title": "信息技术部-大数据系统运维岗",
       "company": "太平洋证券",
