@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>京津大数据 & AI 运维求职看板</title>
+  <style>
+    :root {
+      --bg: #f3f4f6;
+      --card: #ffffff;
+      --text: #111827;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --primary: #2563eb;
+      --primary-soft: #eff6ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    .container { max-width: 900px; margin: 0 auto; padding: 24px 16px 60px; }
+    .header {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px 22px;
+      margin-bottom: 16px;
+    }
+    .header h1 { margin: 0 0 8px; font-size: 22px; }
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 20px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .stat-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--primary-soft);
+      color: #1d4ed8;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+    }
+    .filters {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 18px;
+      margin-bottom: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .search-input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 14px;
+      outline: none;
+    }
+    .search-input:focus { border-color: var(--primary); }
+    .filter-group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .filter-label { font-size: 12px; color: var(--muted); font-weight: 600; margin-right: 4px; }
+    .chip {
+      border: 1px solid #d1d5db;
+      background: #fff;
+      color: #374151;
+      padding: 5px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .chip.active {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+      font-weight: 600;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+      margin-bottom: 14px;
+      transition: box-shadow 0.15s ease;
+    }
+    .card:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.05); }
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .card-title { font-size: 17px; font-weight: 700; line-height: 1.4; }
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .badge-new { background: #fee2e2; color: #b91c1c; }
+    .badge-track { background: #eff6ff; color: #1d4ed8; }
+    .badge-verified { background: #dcfce7; color: #166534; }
+    .badge-snippet { background: #f3f4f6; color: #4b5563; }
+    .salary {
+      white-space: nowrap;
+      background: #fef3c7;
+      color: #b45309;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 4px 11px;
+      border-radius: 999px;
+    }
+    .sub-info { margin-top: 8px; font-size: 13px; color: #4b5563; }
+    .box-match {
+      margin-top: 12px;
+      padding: 10px 12px;
+      background: #f0fdf4;
+      border-left: 4px solid #16a34a;
+      border-radius: 4px;
+      font-size: 13px;
+      color: #166534;
+      line-height: 1.6;
+    }
+    .box-gap {
+      margin-top: 8px;
+      padding: 10px 12px;
+      background: #fffbeb;
+      border-left: 4px solid #d97706;
+      border-radius: 4px;
+      font-size: 13px;
+      color: #92400e;
+      line-height: 1.6;
+    }
+    .actions { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .btn-primary {
+      display: inline-block;
+      background: var(--primary);
+      color: #fff;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 15px;
+      border-radius: 6px;
+    }
+    .btn-secondary {
+      display: inline-block;
+      background: #f9fafb;
+      color: #374151;
+      border: 1px solid #d1d5db;
+      text-decoration: none;
+      font-size: 12px;
+      padding: 7px 12px;
+      border-radius: 6px;
+    }
+    .empty {
+      text-align: center;
+      padding: 48px 20px;
+      background: var(--card);
+      border: 1px dashed #d1d5db;
+      border-radius: 12px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>京津大数据 &amp; AI 运维直招看板</h1>
+      <div class="meta-row">
+        <span id="updatedAt">最近更新：加载中...</span>
+        <span class="stat-pill" id="todayCount">今日新增：-</span>
+        <span class="stat-pill" id="totalCount">累计收录：-</span>
+        <span id="modelInfo">精筛模型：-</span>
+      </div>
+    </div>
+
+    <div class="filters">
+      <input type="text" id="kwInput" class="search-input" placeholder="输入公司名、岗位、K8s、Hadoop、vLLM、Dify 等关键词实时过滤..." />
+      <div class="filter-group" id="cityGroup">
+        <span class="filter-label">地点：</span>
+        <button class="chip active" data-val="ALL">全部</button>
+        <button class="chip" data-val="北京">北京</button>
+        <button class="chip" data-val="天津">天津</button>
+        <button class="chip" data-val="远程">远程</button>
+      </div>
+      <div class="filter-group" id="trackGroup">
+        <span class="filter-label">方向：</span>
+        <button class="chip active" data-val="ALL">全部方向</button>
+        <button class="chip" data-val="大数据/系统运维">大数据/系统运维</button>
+        <button class="chip" data-val="AI部署/交付运维">AI部署/交付运维</button>
+        <button class="chip" id="onlyNewBtn" data-onlynew="0">🔥 仅看最新一批</button>
+      </div>
+    </div>
+
+    <div id="jobList"></div>
+  </div>
+
+  <script>
+    let allJobs = [];
+    let latestDate = "";
+    let state = { city: "ALL", track: "ALL", onlyNew: false, kw: "" };
+
+    function esc(s) {
+      const d = document.createElement("div");
+      d.textContent = s == null ? "" : String(s);
+      return d.innerHTML;
+    }
+
+    function render() {
+      const box = document.getElementById("jobList");
+      const kw = state.kw.trim().toLowerCase();
+
+      const list = allJobs.filter(j => {
+        if (state.city !== "ALL" && !(j.city || "").includes(state.city)) return false;
+        if (state.track !== "ALL" && j.track !== state.track) return false;
+        if (state.onlyNew && j.added_date !== latestDate) return false;
+        if (kw) {
+          const hay = `${j.title} ${j.company} ${j.city} ${j.match} ${j.gap}`.toLowerCase();
+          if (!hay.includes(kw)) return false;
+        }
+        return true;
+      });
+
+      if (!list.length) {
+        box.innerHTML = `<div class="empty">当前筛选条件下暂无岗位（首次部署后请先在 GitHub Actions 手动点一次 Run workflow 生成数据）</div>`;
+        return;
+      }
+
+      box.innerHTML = list.map((j, i) => {
+        const isNew = latestDate && j.added_date === latestDate;
+        const vClass = j.verify_status === "原网页已核验" ? "badge-verified" : "badge-snippet";
+        const gUrl = "https://www.google.com/search?q=" + encodeURIComponent(`${j.company} ${j.title} ${j.city} 招聘`);
+        return `
+          <div class="card">
+            <div class="card-top">
+              <div class="card-title">
+                #${i + 1} ${esc(j.title)}
+                ${isNew ? `<span class="badge badge-new">最新</span>` : ""}
+                <span class="badge badge-track">${esc(j.track || "精选运维")}</span>
+                <span class="badge ${vClass}">${esc(j.verify_status || "已核验")}</span>
+              </div>
+              <div class="salary">${esc(j.salary || "未知")}</div>
+            </div>
+            <div class="sub-info">
+              🏢 ${esc(j.company)} &nbsp;|&nbsp; 📍 ${esc(j.city)} &nbsp;|&nbsp; 📅 发布：${esc(j.date || "近期")} &nbsp;|&nbsp; 入库：${esc(j.added_date || "-")}
+            </div>
+            <div class="box-match"><strong>匹配点：</strong>${esc(j.match)}</div>
+            <div class="box-gap"><strong>差距：</strong>${esc(j.gap)}</div>
+            <div class="actions">
+              <a class="btn-primary" href="${esc(j.url)}" target="_blank" rel="noopener noreferrer">打开原招聘页 &rarr;</a>
+              <a class="btn-secondary" href="${gUrl}" target="_blank" rel="noopener noreferrer">Google 检索核验</a>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function bindGroup(groupId, key) {
+      document.getElementById(groupId).addEventListener("click", e => {
+        const btn = e.target.closest(".chip");
+        if (!btn || btn.id === "onlyNewBtn") return;
+        document.querySelectorAll(`#${groupId} .chip:not(#onlyNewBtn)`).forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        state[key] = btn.dataset.val;
+        render();
+      });
+    }
+
+    bindGroup("cityGroup", "city");
+    bindGroup("trackGroup", "track");
+
+    document.getElementById("onlyNewBtn").addEventListener("click", e => {
+      state.onlyNew = !state.onlyNew;
+      e.currentTarget.classList.toggle("active", state.onlyNew);
+      render();
+    });
+
+    document.getElementById("kwInput").addEventListener("input", e => {
+      state.kw = e.target.value;
+      render();
+    });
+
+    fetch("./jobs.json?t=" + Date.now())
+      .then(r => { if (!r.ok) throw new Error("尚未生成数据"); return r.json(); })
+      .then(data => {
+        allJobs = Array.isArray(data.jobs) ? data.jobs : [];
+        latestDate = data.latest_date || "";
+        document.getElementById("updatedAt").textContent = "最近更新：" + (data.updated_at || "-");
+        document.getElementById("todayCount").textContent = "本批新增：" + (data.today_new_count ?? 0) + " 条";
+        document.getElementById("totalCount").textContent = "累计收录：" + allJobs.length + " 条";
+        document.getElementById("modelInfo").textContent = "精筛模型：" + (data.model || "-");
+        render();
+      })
+      .catch(() => {
+        document.getElementById("updatedAt").textContent = "最近更新：等待首次运行";
+        render();
+      });
+  </script>
+</body>
+</html>
