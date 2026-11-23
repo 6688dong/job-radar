@@ -173,13 +173,13 @@ def resolve_gemini_models(api_key):
         available.append(name)
 
     priority_patterns = [
-        "gemini-3.8-flash",
         "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
         "gemini-2.5-flash-lite",
         "gemini-2.5-flash",
         "flash-lite",
         "flash",
+        "gemini-3.8-flash",
     ]
     ordered = []
     for pat in priority_patterns:
@@ -225,9 +225,47 @@ def normalize_url(u):
         return ""
     parsed = urllib.parse.urlsplit(u)
     clean_q = urllib.parse.urlencode(
-        [(k, v) for k, v in urllib.parse.parse_qsl(parsed.query) if not k.lower().startswith(("utm_", "spm", "ka"))]
+        [(k, v) for k, v in urllib.parse.parse_qsl(parsed.query) if not k.lower().startswith(("utm_", "spm", "ka", "pgref"))]
     )
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, clean_q, ""))
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def resolve_google_goto(u):
+    """解开 google.com/goto（或 /url）跳转：单跳不跟随，只取 302 的 Location。
+
+    Google 从 2026 年下半年起把部分搜索结果包成加密重定向链接，无法本地解密，
+    只能发一次轻量请求从响应头剥真实地址。必须单跳不跟随：如果顺手跟随第二跳，
+    目标招聘站一旦反爬超时，第一跳已经吐出来的真实地址也会跟着丢掉。
+    非 goto 链接原样返回；解不开时也原样返回，绝不丢数据。
+    """
+    u = str(u or "").strip()
+    parsed = urllib.parse.urlsplit(u)
+    if parsed.netloc.lower() not in ("www.google.com", "google.com"):
+        return u
+    if parsed.path not in ("/goto", "/url"):
+        return u
+    try:
+        opener = urllib.request.build_opener(_NoRedirectHandler)
+        req = urllib.request.Request(u, method="GET", headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ),
+        })
+        with opener.open(req, timeout=10) as resp:
+            loc = resp.headers.get("Location")
+            return loc.strip() if loc else u
+    except urllib.error.HTTPError as e:
+        # 不跟随的 opener 会把 302 抛成 HTTPError，Location 就在它的响应头里
+        loc = e.headers.get("Location") if e.headers else None
+        return loc.strip() if loc else u
+    except Exception:
+        return u
 
 
 def fetch_and_verify_candidate(item):
@@ -249,6 +287,7 @@ def fetch_and_verify_candidate(item):
         with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
             if resp.status >= 400:
                 return None
+            final_url = resp.url
             raw_bytes = resp.read(250000)
             charset = resp.headers.get_content_charset() or "utf-8"
             html_str = raw_bytes.decode(charset, errors="ignore")
@@ -286,6 +325,10 @@ def fetch_and_verify_candidate(item):
 
     item["verify_status"] = "原网页已核验"
     item["page_text"] = text[:3000]
+    # 常规域名重定向（如移动端域名跳转）同步更新为最终 URL；登录墙/下架页不走到这里，不会误写登录页地址
+    final_clean = normalize_url(final_url)
+    if final_clean and final_clean != url:
+        item["url"] = final_clean
     return item
 
 
@@ -303,7 +346,9 @@ def collect_verified_candidates(serpapi_key):
             continue
 
         for r in results:
-            url = normalize_url(r.get("link"))
+            # 先解开 google.com/goto 跳转再 normalize 和去重：goto 里可能藏着列表页或重复链接，
+            # 不先解开会白白占掉每赛道 18 条的宝贵名额
+            url = normalize_url(resolve_google_goto(r.get("link")))
             title = str(r.get("title") or "").strip()
             snippet = str(r.get("snippet") or "").strip()
             date_hint = str(r.get("date") or "").strip()
@@ -456,6 +501,7 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
 请你逐条阅读 `search_title`、`snippet` 和 `webpage_excerpt`，严格按求职者画像筛选出真正值得投递的岗位。
 
 【求职者技术栈画像】
+- 具备银行生产级大数据平台运维背景；银行、券商、保险、央国企及各类企业的【甲方自招/直招】是核心目标岗位，严禁以“金融证券行业不符”为由丢弃甲方岗位；仅拦截派驻到银行的第三方外包乙方
 - 熟悉 Linux 命令行、大数据组件运维（HDFS/YARN/Kafka/Spark/Hive/HBase）
 - Docker/K8s 入门：能部署、能排查常见 Pod 问题
 - Python 能写一两百行的运维脚本
@@ -466,7 +512,7 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
 1. 任何综合IT外包、银行/金融驻场乙方、运营商驻场、劳务派遣、RPO猎头代招模糊公司、华为OD（如软通、中软、中电金信、博彦、法本、文思海辉、神州信息、京北方、宇信、长亮、银信、友友天宇、亚信、浩鲸、外企德科、FESCO等）
 2. 聚合列表页（没有具体某一家公司和具体某一个岗位名称的泛列表页直接丢弃）
 3. 工作地点不在【北京、天津、远程】范围内的岗位直接丢弃
-4. 智算中心、GPU千卡集群、RDMA/InfiniBand/NCCL、大模型训练底层架构岗
+4. 纯智算中心底座建设、千卡GPU训练集群组网(RDMA/InfiniBand/NCCL)、大模型训练底层架构岗直接丢弃；但注意：【大模型交付 / AI交付 / 私有化部署 / FDE / 大模型运维】属于核心目标方向——在几台 GPU/昇腾服务器上用 Docker/vLLM 做模型推理私有化交付的保留（不熟的国产硬件写进 gap），不要一见 GPU/昇腾就判死刑
 5. 运维开发(SRE研发)、DevOps平台开发、算法工程师、Java/Go后端开发岗
 6. 明确要求 5 年以上大模型或智算经验
 7. company 栏填的是招聘平台名或带“备注”的说明（如智联、猎聘、BOSS直聘、前程无忧、国聘、智联招聘、备注等），不是真实直招企业名——查不到真实企业名就直接丢弃，绝不输出
@@ -477,7 +523,7 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
 - 如果 `webpage_excerpt` 为空（登录墙导致没读到正文），优先从 `search_title`/`snippet` 的企业署名里提取真实公司名；只有标题和摘要里完全只有平台名或“某知名企业”且无任何真实字号时，才丢弃该条。
 - 如果 `verify_status` 为 "搜索摘要核验" 且摘要里没写薪资或细节，必须如实把 `salary` 填为 "未知"，并在 `gap` 中注明 "正文受登录墙限制，需点开核对完整JD"。
 - 只输出合法的 JSON 数组，不要任何多余解释。数组必须包含输入中每一个 source_id 的判定，严禁遗漏任何一条（拿不准也不许跳过）：
-  - 若丢弃：{{"source_id": 1, "decision": "drop", "reason": "一句话具体原因（20字内，如：命中外包公司软通、地点不在北京天津、正文为空且标题无真实公司名、偏Java开发）"}}
+  - 若丢弃：{{"source_id": 1, "decision": "drop", "reason": "一句话具体原因（20字内，如：命中外包公司软通、地点不在北京天津、正文为空且标题无真实公司名、偏Java开发）。严禁写“与目标方向不符”“与目标行业不符”这种模糊套话，必须写明该页实际在招什么或命中了哪条红线（如：主帖实为算法工程师、大模型交付仅为底部推荐词、要求RDMA千卡组网）"}}
   - 若保留：{{"source_id": 2, "decision": "keep", "title": "原帖准确岗位名称（不要把标题和正文里的不同叫法拼在一起）", "company": "准确公司名称（正文为空时可从标题/摘要的企业署名提取；只有标题和摘要里完全只有平台名或“某知名企业”且无任何真实字号时才丢弃该条）", "city": "北京 或 天津 或 远程", "salary": "真实薪资范围 或 未知", "date": "发布时间如 2026-11-22 或 近期 或 未知", "match": "一句话说明与求职者画像的匹配点", "gap": "一句话说明岗位要求中求职者尚不具备的技能差距"}}
 - 若全部不符合，也要逐条输出 drop 判定，不要只输出 []。
 
@@ -769,6 +815,14 @@ def main():
     old_jobs = board_data.get("jobs") if isinstance(board_data, dict) else []
     if not isinstance(old_jobs, list):
         old_jobs = []
+    # 顺手清脏数据：历史卡片里带 google.com/goto 的链接也解开写回干净地址，解不开就保留原链接
+    for oj in old_jobs:
+        u = str(oj.get("url") or "")
+        if "google.com/goto" in u or "google.com/url" in u:
+            clean = normalize_url(resolve_google_goto(u))
+            if clean and clean != u:
+                log("历史卡片链接已洗净: {} -> {}".format(u[:50], clean[:80]))
+                oj["url"] = clean
 
     merged_board_jobs = (new_jobs + old_jobs)[:MAX_HISTORY_JOBS]
     save_json_atomic(JOBS_JSON_FILE, {
