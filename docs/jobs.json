@@ -1,7 +1,22 @@
 {
-  "updated_at": "2026-11-23 12:31:39",
+  "updated_at": "2026-11-23 12:56:55",
   "latest_date": "2026-11-23",
-  "today_new_count": 0,
+  "today_new_count": 1,
   "model": "gemini-3.5-flash-lite",
-  "jobs": []
+  "jobs": [
+    {
+      "title": "FDE开发工程师/交付开发工程师（大模型）",
+      "company": "英视睿达",
+      "city": "北京",
+      "salary": "15,000–25,000 / 月",
+      "date": "2026-11-06",
+      "url": "https://fdecareer.work/jobs/zhaopin-cc347042880j41025957702/",
+      "verify_status": "原网页已核验",
+      "track": "AI部署/交付运维",
+      "match": "岗位涉及大模型私有化部署、交付、RAG与知识库集成，与求职者的Ollama/vLLM部署及Dify知识库经验高度匹配。",
+      "gap": "要求有一定的业务系统对接和代码集成能力，求职者Python技能为1-2百行脚本，复杂系统集成有待验证。",
+      "added_date": "2026-11-23",
+      "id": "英视睿达|fde开发工程师/交付开发工程师（大模型）|北京"
+    }
+  ]
 }
