@@ -69,14 +69,31 @@ EXCLUDED_TITLE_KEYWORDS = (
     "算法工程师", "后端开发", "java开发", "go开发", "golang", "前端开发"
 )
 
+# 公司名黑名单：招聘平台名、带“备注”的说明一律不得冒充公司名，查不到真实企业名硬性丢弃
+PLATFORM_COMPANY_BLACKLIST = (
+    "智联", "猎聘", "BOSS直聘", "前程无忧", "国聘", "备注",
+    "51job", "拉勾", "脉脉",
+)
+
+# 详情页 URL 锁定：只认单条职位详情页，列表页/聚合页直接丢弃
+# 智联两套格式并存：jobs.zhaopin.com/CC...htm 与 www.zhaopin.com/jobdetail/CC...htm，只认 /jobdetail/ 会误杀一大半
+DETAIL_URL_REGEX = {
+    "zhaopin.com": r"zhaopin\.com/(?:jobdetail/)?CC[A-Z0-9]+\.htm",
+}
+DETAIL_URL_MARKERS = {
+    "liepin.com": ("/job/",),
+    "zhipin.com": ("/job_detail/",),
+    "iguopin.com": ("/job/detail",),
+}
+
 # 每日 6 次精准 Google 查询（每月约 180 次，安全控制在 SerpApi 免费 250 次额度内）
 SEARCH_PLAN = [
     ("大数据/系统运维", '("大数据运维" OR "数据平台运维" OR "Hadoop运维") ("北京" OR "天津") (招聘 OR 直招) -软通 -中软 -驻场'),
     ("大数据/系统运维", '("Linux运维" OR "系统运维工程师") ("北京" OR "天津") ("K8s" OR "Docker" OR "Kafka" OR "Spark") 招聘 -外包 -驻场'),
-    ("大数据/系统运维", '(site:liepin.com OR site:iguopin.com OR site:zhaopin.com OR site:zhipin.com) ("大数据运维" OR "数据平台运维") ("北京" OR "天津")'),
+    ("大数据/系统运维", '(site:liepin.com/job/ OR site:iguopin.com/job/detail OR site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:zhipin.com/job_detail/) ("大数据运维" OR "数据平台运维") ("北京" OR "天津")'),
     ("AI部署/交付运维", '("私有化部署" OR "大模型交付" OR "AI交付工程师" OR "大模型运维") ("北京" OR "天津") 招聘 -外包 -算法工程师'),
     ("AI部署/交付运维", '("vLLM" OR "Ollama" OR "Dify" OR "大模型部署" OR "AI实施") ("北京" OR "天津") (运维 OR 交付 OR 实施) -外包'),
-    ("AI部署/交付运维", '(site:liepin.com OR site:iguopin.com OR site:zhaopin.com OR site:zhipin.com) ("私有化部署" OR "AI交付" OR "大模型运维") ("北京" OR "天津")'),
+    ("AI部署/交付运维", '(site:liepin.com/job/ OR site:iguopin.com/job/detail OR site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:zhipin.com/job_detail/) ("私有化部署" OR "AI交付" OR "大模型运维") ("北京" OR "天津")'),
 ]
 
 
@@ -120,8 +137,12 @@ def strip_safe_words(text):
     return res
 
 
-def resolve_gemini_model(api_key):
-    """自动查询当前项目支持的免费 Flash 模型，优先选高配额的 Flash Lite，彻底杜绝 404"""
+def resolve_gemini_models(api_key):
+    """自动查询当前项目支持的免费 Flash 模型，按优先级排好序返回候选列表。
+
+    只查“模型存不存在”不代表调用时有额度：主力模型若在调用时报 429/503，
+    调用方按此列表逐个降级，彻底杜绝“查得到却调不通就全盘失败”。
+    """
     url = "https://generativelanguage.googleapis.com/v1beta/models?key={}".format(
         urllib.parse.quote(api_key)
     )
@@ -141,24 +162,27 @@ def resolve_gemini_model(api_key):
         available.append(name)
 
     priority_patterns = [
+        "gemini-3.8-flash",
         "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
-        "gemini-3.8-flash",
         "gemini-2.5-flash-lite",
         "gemini-2.5-flash",
         "flash-lite",
         "flash",
     ]
+    ordered = []
     for pat in priority_patterns:
         for name in available:
-            if pat in name.lower():
-                log("已自动匹配可用 Gemini 模型: {}".format(name))
-                return name
+            if pat in name.lower() and name not in ordered:
+                ordered.append(name)
+    for name in available:
+        if name not in ordered:
+            ordered.append(name)
 
-    if available:
-        log("使用备选模型: {}".format(available[0]))
-        return available[0]
-    raise RuntimeError("当前 API Key 名下未查询到任何支持 generateContent 的文本模型")
+    if not ordered:
+        raise RuntimeError("当前 API Key 名下未查询到任何支持 generateContent 的文本模型")
+    log("已自动匹配可用 Gemini 模型（按优先级）: {}".format(", ".join(ordered)))
+    return ordered
 
 
 def search_serpapi(serpapi_key, query):
@@ -239,14 +263,14 @@ def fetch_and_verify_candidate(item):
     if len(text) < 350 and any(s in text.lower() for s in login_wall_signals):
         return item
 
-    cleaned_body = strip_safe_words(text[:2500])
+    cleaned_body = strip_safe_words(text[:3000])
     hit_phrase = next((p for p in BODY_OUTSOURCE_PHRASES if p in cleaned_body), None)
     if hit_phrase:
         log("原网页正文命中驻场/外包短语('{}')，已剔除: {}".format(hit_phrase, item["title"][:40]))
         return None
 
     item["verify_status"] = "原网页已核验"
-    item["page_text"] = text[:1100]
+    item["page_text"] = text[:3000]
     return item
 
 
@@ -274,6 +298,25 @@ def collect_verified_candidates(serpapi_key):
             if any(kw in pre_check for kw in OUTSOURCE_KEYWORDS):
                 continue
             if any(kw in title.lower() for kw in EXCLUDED_TITLE_KEYWORDS):
+                continue
+
+            # 详情页 URL 锁死：三大平台只认单条职位详情页路径，列表页/聚合页直接丢弃
+            # 注意不要在域名前写死 www.：Google 大量收录 m.liepin.com / m.zhipin.com 移动页
+            host = urllib.parse.urlsplit(url).netloc.lower()
+            detail_ok = True
+            regex_pat = next(
+                (p for dom, p in DETAIL_URL_REGEX.items() if dom in host), None
+            )
+            if regex_pat is not None:
+                detail_ok = re.search(regex_pat, url, re.IGNORECASE) is not None
+            else:
+                detail_markers = next(
+                    (m for dom, m in DETAIL_URL_MARKERS.items() if dom in host), None
+                )
+                if detail_markers is not None:
+                    detail_ok = any(mk in url for mk in detail_markers)
+            if not detail_ok:
+                log("非详情页 URL，已剔除: {}".format(url[:80]))
                 continue
 
             seen_urls.add(url)
@@ -353,9 +396,10 @@ def extract_json_array(raw_text):
     return []
 
 
-def filter_with_gemini(api_key, model_name, track_label, candidates, today_str):
+def filter_with_gemini(api_key, model_names, track_label, candidates, today_str):
+    """按候选模型列表逐个精筛：主力模型 429/503 重试无果时当场降级到下一个，返回 (岗位列表, 实际用到的模型)。"""
     if not candidates:
-        return []
+        return [], None
 
     indexed_input = []
     id_map = {}
@@ -388,6 +432,7 @@ def filter_with_gemini(api_key, model_name, track_label, candidates, today_str):
 4. 智算中心、GPU千卡集群、RDMA/InfiniBand/NCCL、大模型训练底层架构岗
 5. 运维开发(SRE研发)、DevOps平台开发、算法工程师、Java/Go后端开发岗
 6. 明确要求 5 年以上大模型或智算经验
+7. company 栏填的是招聘平台名或带“备注”的说明（如智联、猎聘、BOSS直聘、前程无忧、国聘、智联招聘、备注等），不是真实直招企业名——查不到真实企业名就直接丢弃，绝不输出
 
 【真实性铁律】
 - 只能基于提供的候选数据提取，严禁编造公司名、薪资或要求。
@@ -415,7 +460,20 @@ def filter_with_gemini(api_key, model_name, track_label, candidates, today_str):
         data_json=json.dumps(indexed_input, ensure_ascii=False, indent=2),
     )
 
-    raw_reply = call_gemini_pure_text(api_key, model_name, prompt)
+    raw_reply = ""
+    used_model = None
+    last_err = None
+    for model_name in model_names:
+        try:
+            raw_reply = call_gemini_pure_text(api_key, model_name, prompt)
+            used_model = model_name
+            break
+        except Exception as e:
+            last_err = e
+            log("模型 {} 调用失败，降级到下一个模型: {}".format(model_name, str(e)[:200]))
+    if used_model is None:
+        raise RuntimeError("全部候选模型调用失败: {}".format(last_err))
+    log("方向 [{}] 实际使用模型: {}".format(track_label, used_model))
     parsed = extract_json_array(raw_reply)
 
     final_jobs = []
@@ -432,6 +490,11 @@ def filter_with_gemini(api_key, model_name, track_label, candidates, today_str):
         company = str(item.get("company") or "").strip()
         city = str(item.get("city") or "").strip()
         if not title or not company or company in ("未知", "某公司", "某知名企业", "猎头代招"):
+            continue
+        # 平台名冒充公司名：代码层硬性拦截，查不到真实企业名一律丢弃
+        hit_platform = next((kw for kw in PLATFORM_COMPANY_BLACKLIST if kw in company), None)
+        if hit_platform:
+            log("Python 终审拦截平台名冒充公司名('{}'): {} | {}".format(hit_platform, company, title))
             continue
         if not any(c in city for c in ("北京", "天津", "远程")):
             continue
@@ -458,7 +521,7 @@ def filter_with_gemini(api_key, model_name, track_label, candidates, today_str):
             "match": str(item.get("match") or "无").strip(),
             "gap": str(item.get("gap") or "无").strip(),
         })
-    return final_jobs
+    return final_jobs, used_model
 
 
 def make_fingerprint(j):
@@ -623,15 +686,19 @@ def main():
     today_str = now_bj().strftime("%Y-%m-%d")
     updated_at_str = now_bj().strftime("%Y-%m-%d %H:%M:%S")
 
-    model_name = resolve_gemini_model(gemini_key)
+    model_names = resolve_gemini_models(gemini_key)
     verified_groups = collect_verified_candidates(serpapi_key)
 
     all_filtered = []
+    model_used = None
     for idx, (track, cands) in enumerate(verified_groups.items()):
         if idx > 0:
-            time.sleep(10)
-        log("正在调用 {} 精筛方向 [{}]...".format(model_name, track))
-        jobs = filter_with_gemini(gemini_key, model_name, track, cands, today_str)
+            # 两次大请求拆进前后两个分钟窗口，避免同分钟重试叠加撞上 250K TPM 上限
+            time.sleep(45)
+        log("正在调用 {} 精筛方向 [{}]...".format(model_names[0], track))
+        jobs, used = filter_with_gemini(gemini_key, model_names, track, cands, today_str)
+        if model_used is None:
+            model_used = used
         log("方向 [{}] 最终通过审核: {} 条".format(track, len(jobs)))
         all_filtered.extend(jobs)
 
@@ -665,7 +732,7 @@ def main():
         "updated_at": updated_at_str,
         "latest_date": today_str,
         "today_new_count": len(new_jobs),
-        "model": model_name,
+        "model": model_used or ",".join(model_names),
         "jobs": merged_board_jobs,
     })
     log("网页看板数据已写入: {} (累计收录 {} 条)".format(JOBS_JSON_FILE, len(merged_board_jobs)))
