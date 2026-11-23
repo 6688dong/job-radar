@@ -1,7 +1,7 @@
 {
-  "updated_at": "2026-11-23 14:28:47",
-  "latest_date": "2026-11-23",
-  "today_new_count": 4,
+  "updated_at": "2026-11-24 01:43:32",
+  "latest_date": "2026-11-24",
+  "today_new_count": 0,
   "model": "gemini-3.5-flash-lite",
   "jobs": [
     {
@@ -38,7 +38,7 @@
       "city": "北京",
       "salary": "未知",
       "date": "2026-11-09",
-      "url": "https://www.google.com/goto?url=CAEShwEBxCJF14GLt3Rlf_j9UCqOYMiRs6JT0gsZev9tleNm13imuAZKxS5xexxAn-FlH0SBEGn7xxKZMNo1KmANLjq_yj8VM0-HKCvsH1brTsmIv4z8siDdy3nGGEMBHmhMgecA-og1HHoQvu2-BuFw2q8YZPzqyVf86J6-6_7kYSbFSgwHR3SxGDE",
+      "url": "https://jobs.bytedance.com/experienced/position/7445126930473077010/detail",
       "verify_status": "摘要快照·待核实",
       "track": "大数据/系统运维",
       "match": "涵盖北京地区，符合Linux及平台运维背景",
@@ -52,7 +52,7 @@
       "city": "北京",
       "salary": "未知",
       "date": "3天前",
-      "url": "https://www.google.com/goto?url=CAESgAEBxCJF11wCXa6WyxbRvZMCWR2fEnYeV1NdbFdRtEIItCnY52hpJ5vDjtLKpzgzh3YwL11TMn08OXqpJK0_MqEjbjNdx8YC-1YRfrIzyMJGCNt2THVnGy2mkT4yzAd58I0-MWgvO4GBhVrsiScMp8c4BRAOeDJfigMydupplGAdeA",
+      "url": "https://careers.tencent.com/jobdesc.html?postId=2113089274038628352",
       "verify_status": "摘要快照·待核实",
       "track": "AI部署/交付运维",
       "match": "大厂甲方/直招AI交付FDE岗位，符合大模型部署背景",
