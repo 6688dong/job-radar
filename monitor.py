@@ -1,0 +1,695 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import concurrent.futures
+import html
+import json
+import os
+import re
+import smtplib
+import ssl
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from email.header import Header
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import formatdate
+from html.parser import HTMLParser
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DOCS_DIR = os.path.join(BASE_DIR, "docs")
+JOBS_JSON_FILE = os.path.join(DOCS_DIR, "jobs.json")
+SEEN_FILE = os.path.join(BASE_DIR, "seen_jobs.json")
+
+BJ_TZ = timezone(timedelta(hours=8))
+MAX_DAILY_NEW = 20
+MAX_HISTORY_JOBS = 300
+
+# 全量外包/驻场/派遣黑名单（覆盖综合IT外包、京津金融/运营商驻场、OD与人力壳公司）
+OUTSOURCE_KEYWORDS = (
+    "软通", "中软", "中电金信", "博彦", "亿达", "法本", "诚迈", "文思海辉",
+    "微创软件", "润和软件", "纬创", "佰钧成", "汉得", "柯莱特", "信必优", "东软",
+    "同方鼎欣", "华路时代", "赛意信息", "海隆软件", "凌志软件", "中和软件",
+    "易思博", "拓保软件", "华钦", "音泰思", "浪潮世科", "大展科技", "泽佳",
+    "中富通", "博奥杰", "兴融联", "联蔚", "凯捷", "恩梯梯数据", "印孚瑟斯",
+    "中科软", "京北方", "神州信息", "神州新桥", "宇信", "高伟达", "新致软件",
+    "长亮", "天阳科技", "安硕信息", "赞同科技", "先进数通", "银信科技",
+    "南天信息", "科蓝", "四方精创", "中科金财", "信雅达", "友友天宇", "融鑫",
+    "首信科技", "百信银行", "深演智能",
+    "亚信", "浩鲸", "思特奇", "天源迪科", "东方国信", "直真科技", "亿阳信通",
+    "德科", "外企德科", "fesco", "中智", "科锐", "万宝盛华", "任仕达",
+    "前锦", "易才", "人瑞", "金柚", "英格玛", "人力资源", "人力服务", "人才服务",
+    "劳务", "外包", "驻场", "派遣", "外派", "驻点", "华为od", "od岗"
+)
+
+SAFE_NON_OUTSOURCE_WORDS = (
+    "非外包", "不外包", "非人力外包", "非驻场", "不驻场",
+    "非派遣", "非劳务派遣", "不外派", "无外派", "非od"
+)
+
+# 原网页正文中一旦出现即可直接判定下架的标记
+CLOSED_PAGE_MARKERS = (
+    "职位已关闭", "停止招聘", "该职位已下线", "职位不存在",
+    "已停止招聘", "该岗位已下架", "抱歉，你访问的页面不存在"
+)
+
+# 原网页正文中明确属于外包/驻场合同性质的短语（避免误杀侧边栏推荐公司名）
+BODY_OUTSOURCE_PHRASES = (
+    "驻场运维", "客户现场驻场", "长期驻场", "人力外包岗", "属于外包",
+    "签订外包", "劳务派遣合同", "第三方外包", "外派至", "华为od"
+)
+
+EXCLUDED_TITLE_KEYWORDS = (
+    "智算", "算力池", "gpu集群", "训练平台", "千卡", "万卡",
+    "运维开发", "devops开发", "平台开发", "ai应用开发",
+    "算法工程师", "后端开发", "java开发", "go开发", "golang", "前端开发"
+)
+
+# 每日 6 次精准 Google 查询（每月约 180 次，安全控制在 SerpApi 免费 250 次额度内）
+SEARCH_PLAN = [
+    ("大数据/系统运维", '("大数据运维" OR "数据平台运维" OR "Hadoop运维") ("北京" OR "天津") (招聘 OR 直招) -软通 -中软 -驻场'),
+    ("大数据/系统运维", '("Linux运维" OR "系统运维工程师") ("北京" OR "天津") ("K8s" OR "Docker" OR "Kafka" OR "Spark") 招聘 -外包 -驻场'),
+    ("大数据/系统运维", '(site:liepin.com OR site:iguopin.com OR site:zhaopin.com OR site:zhipin.com) ("大数据运维" OR "数据平台运维") ("北京" OR "天津")'),
+    ("AI部署/交付运维", '("私有化部署" OR "大模型交付" OR "AI交付工程师" OR "大模型运维") ("北京" OR "天津") 招聘 -外包 -算法工程师'),
+    ("AI部署/交付运维", '("vLLM" OR "Ollama" OR "Dify" OR "大模型部署" OR "AI实施") ("北京" OR "天津") (运维 OR 交付 OR 实施) -外包'),
+    ("AI部署/交付运维", '(site:liepin.com OR site:iguopin.com OR site:zhaopin.com OR site:zhipin.com) ("私有化部署" OR "AI交付" OR "大模型运维") ("北京" OR "天津")'),
+]
+
+
+class PlainTextExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self._skip_depth = 0
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() in ("script", "style", "noscript", "svg"):
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag.lower() in ("script", "style", "noscript", "svg") and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if self._skip_depth == 0:
+            s = data.strip()
+            if s:
+                self.parts.append(s)
+
+    def get_text(self):
+        return re.sub(r"\s+", " ", " ".join(self.parts)).strip()
+
+
+def now_bj():
+    return datetime.now(BJ_TZ)
+
+
+def log(msg):
+    ts = now_bj().strftime("%Y-%m-%d %H:%M:%S")
+    print("[{}] {}".format(ts, msg), flush=True)
+
+
+def strip_safe_words(text):
+    res = text.lower()
+    for w in SAFE_NON_OUTSOURCE_WORDS:
+        res = res.replace(w, "")
+    return res
+
+
+def resolve_gemini_model(api_key):
+    """自动查询当前项目支持的免费 Flash 模型，优先选高配额的 Flash Lite，彻底杜绝 404"""
+    url = "https://generativelanguage.googleapis.com/v1beta/models?key={}".format(
+        urllib.parse.quote(api_key)
+    )
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+
+    available = []
+    for m in data.get("models") or []:
+        name = str(m.get("name") or "").replace("models/", "")
+        methods = m.get("supportedGenerationMethods") or []
+        lower = name.lower()
+        if "generateContent" not in methods:
+            continue
+        if any(bad in lower for bad in ("tts", "image", "audio", "live", "embedding", "vision")):
+            continue
+        available.append(name)
+
+    priority_patterns = [
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
+        "flash-lite",
+        "flash",
+    ]
+    for pat in priority_patterns:
+        for name in available:
+            if pat in name.lower():
+                log("已自动匹配可用 Gemini 模型: {}".format(name))
+                return name
+
+    if available:
+        log("使用备选模型: {}".format(available[0]))
+        return available[0]
+    raise RuntimeError("当前 API Key 名下未查询到任何支持 generateContent 的文本模型")
+
+
+def search_serpapi(serpapi_key, query):
+    params = {
+        "engine": "google",
+        "q": query,
+        "hl": "zh-CN",
+        "gl": "cn",
+        "tbs": "qdr:w",  # 限定最近一周内收录或更新的网页
+        "num": "10",
+        "api_key": serpapi_key,
+    }
+    url = "https://serpapi.com/search.json?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=35) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    if "error" in data:
+        raise RuntimeError("SerpApi 返回错误: {}".format(data["error"]))
+    return data.get("organic_results") or []
+
+
+def normalize_url(u):
+    u = str(u or "").strip()
+    if not u.startswith(("http://", "https://")):
+        return ""
+    parsed = urllib.parse.urlsplit(u)
+    clean_q = urllib.parse.urlencode(
+        [(k, v) for k, v in urllib.parse.parse_qsl(parsed.query) if not k.lower().startswith(("utm_", "spm", "ka"))]
+    )
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, clean_q, ""))
+
+
+def fetch_and_verify_candidate(item):
+    """访问原网页核验：剔除下架死链、识别登录墙、提取正文供大模型精准比对"""
+    url = item["url"]
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    }
+    item["verify_status"] = "搜索摘要核验"
+    item["page_text"] = ""
+
+    try:
+        ctx = ssl.create_default_context()
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+            if resp.status >= 400:
+                return None
+            raw_bytes = resp.read(250000)
+            charset = resp.headers.get_content_charset() or "utf-8"
+            html_str = raw_bytes.decode(charset, errors="ignore")
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 410):
+            return None
+        return item
+    except Exception:
+        return item
+
+    parser = PlainTextExtractor()
+    try:
+        parser.feed(html_str)
+        text = parser.get_text()
+    except Exception:
+        text = ""
+
+    if not text or len(text) < 120:
+        return item
+
+    if any(m in text for m in CLOSED_PAGE_MARKERS):
+        log("剔除已下架/关闭页面: {}".format(item["title"][:40]))
+        return None
+
+    # 登录墙/安全验证页识别：保留搜索摘要但诚实标注未读到正文
+    login_wall_signals = ("请完成安全验证", "扫码登录", "登录后查看", "security-check", "验证码登录")
+    if len(text) < 350 and any(s in text.lower() for s in login_wall_signals):
+        return item
+
+    cleaned_body = strip_safe_words(text[:2500])
+    hit_phrase = next((p for p in BODY_OUTSOURCE_PHRASES if p in cleaned_body), None)
+    if hit_phrase:
+        log("原网页正文命中驻场/外包短语('{}')，已剔除: {}".format(hit_phrase, item["title"][:40]))
+        return None
+
+    item["verify_status"] = "原网页已核验"
+    item["page_text"] = text[:1100]
+    return item
+
+
+def collect_verified_candidates(serpapi_key):
+    grouped = {"大数据/系统运维": [], "AI部署/交付运维": []}
+    seen_urls = set()
+
+    for track, q in SEARCH_PLAN:
+        log("SerpApi 检索 [{}]: {}".format(track, q[:48]))
+        try:
+            results = search_serpapi(serpapi_key, q)
+        except Exception as e:
+            log("SerpApi 单条检索异常: {}".format(e))
+            continue
+
+        for r in results:
+            url = normalize_url(r.get("link"))
+            title = str(r.get("title") or "").strip()
+            snippet = str(r.get("snippet") or "").strip()
+            date_hint = str(r.get("date") or "").strip()
+            if not url or not title or url in seen_urls:
+                continue
+
+            pre_check = strip_safe_words(title + " " + snippet)
+            if any(kw in pre_check for kw in OUTSOURCE_KEYWORDS):
+                continue
+            if any(kw in title.lower() for kw in EXCLUDED_TITLE_KEYWORDS):
+                continue
+
+            seen_urls.add(url)
+            grouped[track].append({
+                "track": track,
+                "url": url,
+                "title": title,
+                "snippet": snippet,
+                "date_hint": date_hint,
+            })
+        time.sleep(1)
+
+    verified_grouped = {}
+    for track, items in grouped.items():
+        candidates = items[:18]
+        log("正在并发访问原网页核验 [{}] 候选链接 ({} 条)...".format(track, len(candidates)))
+        valid_items = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            for res in pool.map(fetch_and_verify_candidate, candidates):
+                if res is not None:
+                    valid_items.append(res)
+        verified_grouped[track] = valid_items
+        log("[{}] 网页预检完成，剩余有效候选 {} 条".format(track, len(valid_items)))
+
+    return verified_grouped
+
+
+def call_gemini_pure_text(api_key, model_name, prompt_text, max_retries=3):
+    url = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent".format(model_name)
+    payload = {
+        "contents": [{"parts": [{"text": prompt_text}]}],
+        "generationConfig": {"temperature": 0.1},
+    }
+    body_bytes = json.dumps(payload).encode("utf-8")
+
+    for attempt in range(1, max_retries + 1):
+        req = urllib.request.Request(
+            url,
+            data=body_bytes,
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                api_resp = json.loads(resp.read().decode("utf-8"))
+                cands = api_resp.get("candidates") or []
+                if not cands:
+                    return ""
+                parts = (cands[0].get("content") or {}).get("parts") or []
+                return "".join(str(p.get("text") or "") for p in parts if not p.get("thought")).strip()
+        except urllib.error.HTTPError as e:
+            err = e.read().decode("utf-8", errors="ignore")
+            if e.code in (429, 500, 502, 503, 504) and attempt < max_retries:
+                wait_s = 12 * attempt
+                log("Gemini HTTP {}，等待 {}s 重试...".format(e.code, wait_s))
+                time.sleep(wait_s)
+                continue
+            raise RuntimeError("Gemini 调用失败 (HTTP {}): {}".format(e.code, err[:400]))
+
+
+def extract_json_array(raw_text):
+    if not raw_text:
+        return []
+    decoder = json.JSONDecoder()
+    idx, length = 0, len(raw_text)
+    while idx < length:
+        pos = raw_text.find("[", idx)
+        if pos == -1:
+            break
+        try:
+            obj, end_pos = decoder.raw_decode(raw_text, pos)
+            if isinstance(obj, list):
+                return [x for x in obj if isinstance(x, dict)]
+            idx = end_pos
+        except ValueError:
+            idx = pos + 1
+    return []
+
+
+def filter_with_gemini(api_key, model_name, track_label, candidates, today_str):
+    if not candidates:
+        return []
+
+    indexed_input = []
+    id_map = {}
+    for i, c in enumerate(candidates, 1):
+        id_map[i] = c
+        indexed_input.append({
+            "source_id": i,
+            "search_title": c["title"],
+            "date_hint": c["date_hint"],
+            "snippet": c["snippet"],
+            "verify_status": c["verify_status"],
+            "webpage_excerpt": c["page_text"],
+        })
+
+    prompt = """
+今天北京时间是 {today}。你是极其严谨的求职情报审核员。下面给你一组刚从 Google 抓取并经过网页预检的【{track}】候选结果 JSON。
+请你逐条阅读 `search_title`、`snippet` 和 `webpage_excerpt`，严格按求职者画像筛选出真正值得投递的岗位。
+
+【求职者技术栈画像】
+- 熟悉 Linux 命令行、大数据组件运维（HDFS/YARN/Kafka/Spark/Hive/HBase）
+- Docker/K8s 入门：能部署、能排查常见 Pod 问题
+- Python 能写一两百行的运维脚本
+- 会用 Ollama/vLLM 部署开源大模型，会用 Dify 搭知识库
+- 没有 GPU 集群、RDMA/NCCL、昇腾经验，不会 Go/Java 研发
+
+【一票否决红线】（命中任意一条直接丢弃，不要输出）
+1. 任何综合IT外包、银行/金融驻场乙方、运营商驻场、劳务派遣、RPO猎头代招模糊公司、华为OD（如软通、中软、中电金信、博彦、法本、文思海辉、神州信息、京北方、宇信、长亮、银信、友友天宇、亚信、浩鲸、外企德科、FESCO等）
+2. 聚合列表页（没有具体某一家公司和具体某一个岗位名称的泛列表页直接丢弃）
+3. 工作地点不在【北京、天津、远程】范围内的岗位直接丢弃
+4. 智算中心、GPU千卡集群、RDMA/InfiniBand/NCCL、大模型训练底层架构岗
+5. 运维开发(SRE研发)、DevOps平台开发、算法工程师、Java/Go后端开发岗
+6. 明确要求 5 年以上大模型或智算经验
+
+【真实性铁律】
+- 只能基于提供的候选数据提取，严禁编造公司名、薪资或要求。
+- 如果 `verify_status` 为 "搜索摘要核验" 且摘要里没写薪资或细节，必须如实把 `salary` 填为 "未知"，并在 `gap` 中注明 "正文受登录墙限制，需点开核对完整JD"。
+- 只输出合法的 JSON 数组，不要任何多余解释：
+[
+  {{
+    "source_id": 1,
+    "title": "清洗后的准确岗位名称",
+    "company": "准确公司名称（若无法确认具体直招公司名则直接丢弃该条）",
+    "city": "北京 或 天津 或 远程",
+    "salary": "真实薪资范围 或 未知",
+    "date": "发布时间如 2026-11-22 或 近期 或 未知",
+    "match": "一句话说明与求职者画像的匹配点",
+    "gap": "一句话说明岗位要求中求职者尚不具备的技能差距"
+  }}
+]
+若全部不符合，仅输出 []。
+
+候选数据如下：
+{data_json}
+""".strip().format(
+        today=today_str,
+        track=track_label,
+        data_json=json.dumps(indexed_input, ensure_ascii=False, indent=2),
+    )
+
+    raw_reply = call_gemini_pure_text(api_key, model_name, prompt)
+    parsed = extract_json_array(raw_reply)
+
+    final_jobs = []
+    for item in parsed:
+        try:
+            sid = int(item.get("source_id"))
+        except Exception:
+            continue
+        if sid not in id_map:
+            continue
+
+        orig = id_map[sid]
+        title = str(item.get("title") or "").strip()
+        company = str(item.get("company") or "").strip()
+        city = str(item.get("city") or "").strip()
+        if not title or not company or company in ("未知", "某公司", "某知名企业", "猎头代招"):
+            continue
+        if not any(c in city for c in ("北京", "天津", "远程")):
+            continue
+
+        check_str = strip_safe_words("{} {} {} {}".format(
+            company, title, item.get("match", ""), item.get("gap", "")
+        ))
+        hit_out = next((kw for kw in OUTSOURCE_KEYWORDS if kw in check_str), None)
+        if hit_out:
+            log("Python 终审拦截外包词('{}'): {} | {}".format(hit_out, company, title))
+            continue
+        if any(kw in title.lower() for kw in EXCLUDED_TITLE_KEYWORDS):
+            continue
+
+        final_jobs.append({
+            "title": title,
+            "company": company,
+            "city": city,
+            "salary": str(item.get("salary") or "未知").strip(),
+            "date": str(item.get("date") or orig["date_hint"] or "近期").strip(),
+            "url": orig["url"],  # 强制锁定原始真实 URL，杜绝模型幻觉
+            "verify_status": orig["verify_status"],
+            "track": track_label,
+            "match": str(item.get("match") or "无").strip(),
+            "gap": str(item.get("gap") or "无").strip(),
+        })
+    return final_jobs
+
+
+def make_fingerprint(j):
+    comp = re.sub(r"\s+", "", j.get("company", "")).lower()
+    title = re.sub(r"\s+", "", j.get("title", "")).lower()
+    city = re.sub(r"\s+", "", j.get("city", "")).lower()
+    return "{}|{}|{}".format(comp, title, city)
+
+
+def load_json(path, default):
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def save_json_atomic(path, obj):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def build_email_bodies(job_list, today_str, page_url):
+    cards_html = []
+    plain_lines = [
+        "京津大数据 & AI 运维新增岗位（{}｜共 {} 条）".format(today_str, len(job_list)),
+        "在线看板：{}".format(page_url or "请在 GitHub Pages 查看"),
+        "=" * 48,
+        "",
+    ]
+
+    for idx, j in enumerate(job_list, 1):
+        search_kw = urllib.parse.quote("{} {} {} 招聘".format(j["company"], j["title"], j["city"]))
+        google_url = "https://www.google.com/search?q={}".format(search_kw)
+
+        plain_lines.append("#{}. [{}] {} | {} | {} | {}".format(
+            idx, j["verify_status"], j["title"], j["company"], j["city"], j["salary"]
+        ))
+        plain_lines.append("匹配点：{}".format(j["match"]))
+        plain_lines.append("差距：{}".format(j["gap"]))
+        plain_lines.append("直达链接：{}".format(j["url"]))
+        plain_lines.append("-" * 40)
+
+        v_bg = "#dcfce7" if j["verify_status"] == "原网页已核验" else "#f3f4f6"
+        v_fg = "#166534" if j["verify_status"] == "原网页已核验" else "#4b5563"
+
+        card = """
+        <table width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:14px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+          <tr>
+            <td style="padding:16px 18px;">
+              <div style="font-size:16px;font-weight:700;color:#111827;line-height:1.4;">
+                #{idx} {title}
+                <span style="display:inline-block;margin-left:6px;background:#eff6ff;color:#1d4ed8;font-size:11px;padding:2px 7px;border-radius:4px;">{track}</span>
+                <span style="display:inline-block;margin-left:4px;background:{v_bg};color:{v_fg};font-size:11px;padding:2px 7px;border-radius:4px;">{v_status}</span>
+                <span style="float:right;background:#fef3c7;color:#b45309;font-size:12px;padding:3px 9px;border-radius:999px;">{salary}</span>
+              </div>
+              <div style="margin-top:8px;font-size:13px;color:#4b5563;">
+                🏢 {company} &nbsp;|&nbsp; 📍 {city} &nbsp;|&nbsp; 📅 {date}
+              </div>
+              <div style="margin-top:10px;padding:9px 12px;background:#f0fdf4;border-left:4px solid #16a34a;border-radius:4px;font-size:13px;color:#166534;line-height:1.5;">
+                <strong>匹配点：</strong>{match}
+              </div>
+              <div style="margin-top:7px;padding:9px 12px;background:#fffbeb;border-left:4px solid #d97706;border-radius:4px;font-size:13px;color:#92400e;line-height:1.5;">
+                <strong>差距：</strong>{gap}
+              </div>
+              <div style="margin-top:12px;">
+                <a href="{url}" target="_blank" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-size:13px;font-weight:600;padding:7px 14px;border-radius:6px;margin-right:8px;">打开原招聘页 &rarr;</a>
+                <a href="{g_url}" target="_blank" style="display:inline-block;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;text-decoration:none;font-size:12px;padding:6px 11px;border-radius:6px;">Google 核验</a>
+              </div>
+            </td>
+          </tr>
+        </table>
+        """.format(
+            idx=idx,
+            title=html.escape(j["title"]),
+            track=html.escape(j["track"]),
+            v_bg=v_bg,
+            v_fg=v_fg,
+            v_status=html.escape(j["verify_status"]),
+            salary=html.escape(j["salary"]),
+            company=html.escape(j["company"]),
+            city=html.escape(j["city"]),
+            date=html.escape(j["date"]),
+            match=html.escape(j["match"]),
+            gap=html.escape(j["gap"]),
+            url=html.escape(j["url"], quote=True),
+            g_url=html.escape(google_url, quote=True),
+        )
+        cards_html.append(card)
+
+    board_banner = ""
+    if page_url:
+        board_banner = (
+            '<p style="margin:0 0 16px;"><a href="{u}" target="_blank" '
+            'style="color:#2563eb;font-size:13px;font-weight:600;text-decoration:none;">'
+            '🌐 点击打开在线求职看板（支持按京/津/方向筛选全部历史岗位）&rarr;</a></p>'
+        ).format(u=html.escape(page_url, quote=True))
+
+    html_body = """
+    <html><body style="margin:0;padding:18px;background:#f3f4f6;">
+      <div style="max-width:680px;margin:0 auto;">
+        <h2 style="margin:0 0 6px;color:#111827;font-size:19px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+          京津大数据 &amp; AI 运维新增岗位（{today}｜新增 {cnt} 条）
+        </h2>
+        {banner}
+        {cards}
+      </div>
+    </body></html>
+    """.format(today=today_str, cnt=len(job_list), banner=board_banner, cards="".join(cards_html))
+
+    return "\n".join(plain_lines), html_body
+
+
+def send_gmail(smtp_user, smtp_pass, to_email, subject, plain_body, html_body):
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = Header(subject, "utf-8")
+    msg["From"] = smtp_user
+    msg["To"] = to_email
+    msg["Date"] = formatdate(localtime=True)
+    msg.attach(MIMEText(plain_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+    ctx = ssl.create_default_context()
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=25, context=ctx) as s:
+            s.login(smtp_user, smtp_pass)
+            s.sendmail(smtp_user, [to_email], msg.as_string())
+            log("Gmail 卡片邮件发送成功 (465/SSL -> {})".format(to_email))
+            return
+    except Exception as e1:
+        log("465 端口连接异常 ({})，尝试切换 587/STARTTLS...".format(e1))
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=25) as s:
+            s.ehlo()
+            s.starttls(context=ctx)
+            s.ehlo()
+            s.login(smtp_user, smtp_pass)
+            s.sendmail(smtp_user, [to_email], msg.as_string())
+            log("Gmail 卡片邮件发送成功 (587/STARTTLS -> {})".format(to_email))
+
+
+def main():
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    serpapi_key = os.getenv("SERPAPI_KEY", "").strip()
+    smtp_user = os.getenv("SMTP_USER", "").strip()
+    smtp_pass = os.getenv("SMTP_APP_PASS", "").replace(" ", "").strip()
+    to_email = os.getenv("TO_EMAIL", smtp_user).strip()
+    repo_slug = os.getenv("GITHUB_REPOSITORY", "").strip()
+
+    if not gemini_key or not serpapi_key:
+        raise RuntimeError("缺少必要环境变量：请检查 GitHub Secrets 中的 GEMINI_API_KEY 和 SERPAPI_KEY")
+
+    page_url = ""
+    if "/" in repo_slug:
+        owner, repo = repo_slug.split("/", 1)
+        page_url = "https://{}.github.io/{}/".format(owner, repo)
+
+    today_str = now_bj().strftime("%Y-%m-%d")
+    updated_at_str = now_bj().strftime("%Y-%m-%d %H:%M:%S")
+
+    model_name = resolve_gemini_model(gemini_key)
+    verified_groups = collect_verified_candidates(serpapi_key)
+
+    all_filtered = []
+    for idx, (track, cands) in enumerate(verified_groups.items()):
+        if idx > 0:
+            time.sleep(10)
+        log("正在调用 {} 精筛方向 [{}]...".format(model_name, track))
+        jobs = filter_with_gemini(gemini_key, model_name, track, cands, today_str)
+        log("方向 [{}] 最终通过审核: {} 条".format(track, len(jobs)))
+        all_filtered.extend(jobs)
+
+    seen_dict = load_json(SEEN_FILE, {})
+    if not isinstance(seen_dict, dict):
+        seen_dict = {}
+
+    new_jobs = []
+    batch_fp = set()
+    for j in all_filtered:
+        fp = make_fingerprint(j)
+        if fp in seen_dict or fp in batch_fp:
+            continue
+        batch_fp.add(fp)
+        j["added_date"] = today_str
+        j["id"] = fp
+        new_jobs.append(j)
+        if len(new_jobs) >= MAX_DAILY_NEW:
+            break
+
+    log("去重后今日新增岗位: {} 条".format(len(new_jobs)))
+
+    # 更新前端看板数据源 docs/jobs.json（新岗位排最前，保留历史记录供筛选）
+    board_data = load_json(JOBS_JSON_FILE, {"jobs": []})
+    old_jobs = board_data.get("jobs") if isinstance(board_data, dict) else []
+    if not isinstance(old_jobs, list):
+        old_jobs = []
+
+    merged_board_jobs = (new_jobs + old_jobs)[:MAX_HISTORY_JOBS]
+    save_json_atomic(JOBS_JSON_FILE, {
+        "updated_at": updated_at_str,
+        "latest_date": today_str,
+        "today_new_count": len(new_jobs),
+        "model": model_name,
+        "jobs": merged_board_jobs,
+    })
+    log("网页看板数据已写入: {} (累计收录 {} 条)".format(JOBS_JSON_FILE, len(merged_board_jobs)))
+
+    for j in new_jobs:
+        seen_dict[j["id"]] = updated_at_str
+    trimmed_seen = dict(sorted(seen_dict.items(), key=lambda kv: kv[1])[-2000:])
+    save_json_atomic(SEEN_FILE, trimmed_seen)
+
+    # 若今日有新增且配置了邮箱密钥，发送卡片通知邮件
+    if new_jobs and smtp_user and smtp_pass:
+        subject = "京津运维精选岗位（{}｜新增 {} 条）".format(today_str, len(new_jobs))
+        plain_body, html_body = build_email_bodies(new_jobs, today_str, page_url)
+        try:
+            send_gmail(smtp_user, smtp_pass, to_email, subject, plain_body, html_body)
+        except Exception as e:
+            print("::warning::网页数据已更新，但 Gmail 发送失败，请检查 SMTP_APP_PASS: {}".format(e))
+    elif not new_jobs:
+        log("今日无新增岗位，看板时间戳已刷新，跳过发信。")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        log("运行终止: {}".format(exc))
+        sys.exit(1)
