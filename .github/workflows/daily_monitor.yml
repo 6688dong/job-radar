@@ -1,0 +1,33 @@
+name: Daily Job Radar
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # UTC 06:00 = 每天北京时间 14:00 自动运行
+  workflow_dispatch:      # 支持随时手动点击按钮立即运行
+
+permissions:
+  contents: write
+
+jobs:
+  update-jobs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Google Search + Verification + Gemini Filter
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_APP_PASS: ${{ secrets.SMTP_APP_PASS }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 monitor.py
+
+      - name: Commit updated board data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/jobs.json seen_jobs.json
+          git diff --staged --quiet || (git commit -m "chore: update jobs $(date -u +'%Y-%m-%d')" && git push)
