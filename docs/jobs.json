@@ -1,22 +1,64 @@
 {
-  "updated_at": "2026-11-23 13:56:45",
+  "updated_at": "2026-11-23 14:28:47",
   "latest_date": "2026-11-23",
-  "today_new_count": 7,
+  "today_new_count": 4,
   "model": "gemini-3.5-flash-lite",
   "jobs": [
     {
-      "title": "信息技术部-大数据系统运维岗",
-      "company": "太平洋证券",
+      "title": "AI前沿部署工程师（FDE）",
+      "company": "出门问问",
       "city": "北京",
-      "salary": "10-20k",
+      "salary": "15-30k",
       "date": "近期",
-      "url": "https://www.liepin.com/job/1985063551.shtml",
+      "url": "https://www.liepin.com/job/1984800663.shtml",
       "verify_status": "原网页已核验",
-      "track": "大数据/系统运维",
-      "match": "属于证券甲方直招，完全契合金融生产级大数据平台运维背景，涉及Hadoop/Spark/Hive/HBase及Shell/Python运维脚本",
-      "gap": "学历要求硕士及以上",
+      "track": "AI部署/交付运维",
+      "match": "契合Ollama/vLLM部署、Python/Linux及大模型交付背景",
+      "gap": "要求3年以上相关经验及AI Agent/RAG实际交付背景",
       "added_date": "2026-11-23",
-      "id": "太平洋证券|信息技术部-大数据系统运维岗|北京"
+      "id": "出门问问|ai前沿部署工程师fde|北京"
+    },
+    {
+      "title": "服务器运维工程师（大模型部署）",
+      "company": "转转集团",
+      "city": "北京",
+      "salary": "20-40k·15薪",
+      "date": "2026-10-15",
+      "url": "https://www.liepin.com/job/1986033317.shtml",
+      "verify_status": "原网页已核验",
+      "track": "AI部署/交付运维",
+      "match": "完美契合Linux、Docker/K8s、vLLM/Ollama大模型部署及运维背景",
+      "gap": "要求5-10年运维经验，资历要求较高但完全对口",
+      "added_date": "2026-11-23",
+      "id": "转转|服务器运维工程师大模型部署|北京"
+    },
+    {
+      "title": "AML机器学习平台SRE工程师- Data AML",
+      "company": "字节跳动",
+      "city": "北京",
+      "salary": "未知",
+      "date": "2026-11-09",
+      "url": "https://www.google.com/goto?url=CAEShwEBxCJF14GLt3Rlf_j9UCqOYMiRs6JT0gsZev9tleNm13imuAZKxS5xexxAn-FlH0SBEGn7xxKZMNo1KmANLjq_yj8VM0-HKCvsH1brTsmIv4z8siDdy3nGGEMBHmhMgecA-og1HHoQvu2-BuFw2q8YZPzqyVf86J6-6_7kYSbFSgwHR3SxGDE",
+      "verify_status": "摘要快照·待核实",
+      "track": "大数据/系统运维",
+      "match": "涵盖北京地区，符合Linux及平台运维背景",
+      "gap": "涉及机器学习平台，需确认是否有深度GPU集群硬性要求",
+      "added_date": "2026-11-23",
+      "id": "字节跳动|aml机器学习平台sre工程师dataaml|北京"
+    },
+    {
+      "title": "AI软件解决方案专家(FDE)",
+      "company": "腾讯",
+      "city": "北京",
+      "salary": "未知",
+      "date": "3天前",
+      "url": "https://www.google.com/goto?url=CAESgAEBxCJF11wCXa6WyxbRvZMCWR2fEnYeV1NdbFdRtEIItCnY52hpJ5vDjtLKpzgzh3YwL11TMn08OXqpJK0_MqEjbjNdx8YC-1YRfrIzyMJGCNt2THVnGy2mkT4yzAd58I0-MWgvO4GBhVrsiScMp8c4BRAOeDJfigMydupplGAdeA",
+      "verify_status": "摘要快照·待核实",
+      "track": "AI部署/交付运维",
+      "match": "大厂甲方/直招AI交付FDE岗位，符合大模型部署背景",
+      "gap": "正文受登录墙限制，具体薪资与详细JD需点开核对",
+      "added_date": "2026-11-23",
+      "id": "腾讯|ai软件解决方案专家fde|北京"
     },
     {
       "title": "大数据开发运维工程师",
@@ -30,7 +72,7 @@
       "match": "匹配Linux系统、Python/Shell脚本、开源基础组件（Kafka/HBase/Zookeeper/Hadoop）运维能力",
       "gap": "要求2-5年运维经验，偏向政务云及混合云场景",
       "added_date": "2026-11-23",
-      "id": "煜象科技|大数据开发运维工程师|北京"
+      "id": "煜象|大数据开发运维工程师|北京"
     },
     {
       "title": "大数据SRE运维专家",
@@ -39,7 +81,7 @@
       "salary": "未知",
       "date": "近期",
       "url": "https://jobs.bytedance.com/experienced/m/position/detail/7350885126312331546?recomId=76d24e30-ca67-11f1-9b89-fa163e978222&sourceJobId=7488175719743572242",
-      "verify_status": "搜索摘要核验",
+      "verify_status": "摘要快照·待核实",
       "track": "大数据/系统运维",
       "match": "大厂大数据平台SRE运维，符合自动化与工具化运维方向",
       "gap": "正文受登录墙限制，需点开核对完整JD，大厂专家岗要求较高",
@@ -47,32 +89,18 @@
       "id": "字节跳动|大数据sre运维专家|北京"
     },
     {
-      "title": "大模型推理部署工程师(工程",
-      "company": "金数通(北京)科技有限公司",
-      "city": "北京",
-      "salary": "3.5-6万",
-      "date": "未知",
-      "url": "https://www.zhaopin.com/jobdetail/CC553635720J40756190203.htm",
-      "verify_status": "搜索摘要核验",
-      "track": "AI部署/交付运维",
-      "match": "从事大模型推理部署，契合私有化部署和运维背景。",
-      "gap": "要求5-10年工作经验及硕士学历，资历和学历要求偏高。",
-      "added_date": "2026-11-23",
-      "id": "金数通(北京)科技有限公司|大模型推理部署工程师(工程|北京"
-    },
-    {
       "title": "资深大模型部署/推理优化工程师（Kimi K3方向）",
       "company": "北京互联互通科技有限公司",
       "city": "北京",
       "salary": "2.5-5万",
       "date": "未知",
-      "url": "https://www.google.com/goto?url=CAEScAHEIkXX_6kFkNdQzwklH2Oyt6qOvhGfAewSkFZ42XYbrOiY5dy3yv7OJZLeiWzW2vB0Waqrkd3lAii-1b-laCBCwh66ky-RUWTbSkESXVt3VRInkIBCuNVNOUKXUIo1etEVlq_jlJvdO6TTmEl-G4M",
-      "verify_status": "搜索摘要核验",
+      "url": "http://jobs.zhaopin.com/CC152443410J40870870011.htm",
+      "verify_status": "摘要快照·待核实",
       "track": "AI部署/交付运维",
       "match": "负责大模型部署与推理优化，契合开源大模型部署技能。",
       "gap": "要求3-5年工作经验。",
       "added_date": "2026-11-23",
-      "id": "北京互联互通科技有限公司|资深大模型部署/推理优化工程师（kimik3方向）|北京"
+      "id": "北京互联互通|资深大模型部署/推理优化工程师kimik3方向|北京"
     },
     {
       "title": "AI交付工程师（FDE-工业算法方向）",
@@ -80,13 +108,13 @@
       "city": "北京",
       "salary": "未知",
       "date": "未知",
-      "url": "https://www.google.com/goto?url=CAESaAHEIkXXnjS5nch4UJYMFyr4-9-1A1dtU7CAv4HNw7UjYQ4LMc-2t7WlnZVjqaIWC5t6QUn7_8iIzP0K5e0G1o01Q0jEvjOzruOla44Y9LC2RV7qcTXoHuCpdKHH47-TKU9Zv6VlXoKF",
-      "verify_status": "搜索摘要核验",
+      "url": "https://www.liepin.com/job/1985620677.shtml",
+      "verify_status": "摘要快照·待核实",
       "track": "AI部署/交付运维",
       "match": "负责大模型、智能体应用及工业数据算法的部署与集成，契合交付运维。",
       "gap": "正文受登录墙限制，需点开核对完整JD。",
       "added_date": "2026-11-23",
-      "id": "北京基点起源信息技术有限公司|ai交付工程师（fde-工业算法方向）|北京"
+      "id": "北京基点起源|ai交付工程师fde工业算法方向|北京"
     },
     {
       "title": "前沿部署工程师（FDE）",
@@ -94,13 +122,13 @@
       "city": "北京",
       "salary": "未知",
       "date": "未知",
-      "url": "https://www.google.com/goto?url=CAESgAEBxCJF1y3ekAU3g0G_h473qlHXu59Tf75M737SMoYApEqI38XNNuBC_RQs8-CyfThbiCIV_HVOYw0zQBNg56ejKv2HjZ5pV5nsQwGe8QqyMIuhiNgHFL4Zz-KUv0uuQqii-ALFxhanqsYkuJZ1ytWgR-9orNFVW2-GGzEuIJYkMw",
-      "verify_status": "搜索摘要核验",
+      "url": "https://www.zhipin.com/job_detail/e417cce0a837af040nF82t20GFBZ.html",
+      "verify_status": "摘要快照·待核实",
       "track": "AI部署/交付运维",
       "match": "大模型与智能体能力方案设计与交付，契合AI交付方向。",
       "gap": "正文受登录墙限制，需点开核对完整JD。",
       "added_date": "2026-11-23",
-      "id": "科大讯飞|前沿部署工程师（fde）|北京"
+      "id": "科大讯飞|前沿部署工程师fde|北京"
     },
     {
       "title": "大数据运维工程师",
@@ -114,7 +142,7 @@
       "match": "央企全资子公司甲方自招，负责Hadoop集群及常用大数据组件管理",
       "gap": "要求211/985本科及英语四级，需核对教育背景",
       "added_date": "2026-11-23",
-      "id": "一汽(北京)软件科技有限公司|大数据运维工程师|北京"
+      "id": "一汽|大数据运维工程师|北京"
     },
     {
       "title": "高级大数据运维工程师",
@@ -137,12 +165,12 @@
       "salary": "1.5-1.7万",
       "date": "近期",
       "url": "https://jobs.zhaopin.com/CC568154080J40875753710.htm",
-      "verify_status": "搜索摘要核验",
+      "verify_status": "摘要快照·待核实",
       "track": "大数据/系统运维",
       "match": "符合Linux及Hadoop大数据组件运维要求",
       "gap": "未明确具体运维组件细节",
       "added_date": "2026-11-23",
-      "id": "北京古波特农业科技有限公司|hadoop大数据运维工程师|北京"
+      "id": "北京古波特农业|hadoop大数据运维工程师|北京"
     },
     {
       "title": "hadoop大数据运维工程师",
@@ -151,12 +179,12 @@
       "salary": "1.5-1.6万",
       "date": "近期",
       "url": "http://jobs.zhaopin.com/CCL1438040970J40954083008.htm",
-      "verify_status": "搜索摘要核验",
+      "verify_status": "摘要快照·待核实",
       "track": "大数据/系统运维",
       "match": "符合Hadoop大数据运维方向",
       "gap": "具体经验要求3-5年",
       "added_date": "2026-11-23",
-      "id": "北京丰林搏雅科技有限公司|hadoop大数据运维工程师|北京"
+      "id": "北京丰林搏雅|hadoop大数据运维工程师|北京"
     },
     {
       "title": "数据平台运维实施",
@@ -165,12 +193,12 @@
       "salary": "9000-13000元",
       "date": "近期",
       "url": "https://jobs.zhaopin.com/CC822372190J41023850104.htm",
-      "verify_status": "搜索摘要核验",
+      "verify_status": "摘要快照·待核实",
       "track": "大数据/系统运维",
       "match": "符合数据平台运维方向及天津工作地点",
       "gap": "实施性质偏多，需核对具体运维比重",
       "added_date": "2026-11-23",
-      "id": "中电伟恒(北京)科技发展有限公司天津分公司|数据平台运维实施|天津"
+      "id": "中电伟恒天津分公司|数据平台运维实施|天津"
     },
     {
       "title": "Hadoop运维工程师",
@@ -184,21 +212,7 @@
       "match": "契合Hadoop、Flink、Kafka等大数据组件运维",
       "gap": "要求3年以上Hadoop大数据平台运维经验",
       "added_date": "2026-11-23",
-      "id": "杭州剑齿虎信息技术有限公司|hadoop运维工程师|北京"
-    },
-    {
-      "title": "信息技术部-大数据系统运维岗",
-      "company": "太平洋证券股份有限公司",
-      "city": "北京",
-      "salary": "10-20k",
-      "date": "近期",
-      "url": "https://m.liepin.com/job/1985063551.shtml?pgRef=c_h5_company_page%3Ac_h5_company_similar_job_listcard%402_85063551%3A1%3Agw.99a1240c-430936475",
-      "verify_status": "原网页已核验",
-      "track": "大数据/系统运维",
-      "match": "符合Hadoop/Spark/Hive/Hbase及Shell/Python脚本要求",
-      "gap": "属于金融证券行业，可能对稳定性要求极高",
-      "added_date": "2026-11-23",
-      "id": "太平洋证券股份有限公司|信息技术部-大数据系统运维岗|北京"
+      "id": "杭州剑齿虎|hadoop运维工程师|北京"
     },
     {
       "title": "大数据运维工程师",
@@ -226,7 +240,7 @@
       "match": "符合Ambari及Hadoop集群自动化运维要求",
       "gap": "要求5-10年经验，年限较高",
       "added_date": "2026-11-23",
-      "id": "北京尚博信科技有限公司|hadoop大数据运维工程师|北京"
+      "id": "北京尚博信|hadoop大数据运维工程师|北京"
     },
     {
       "title": "FDE开发工程师/交付开发工程师（大模型）",
@@ -240,7 +254,7 @@
       "match": "岗位涉及大模型私有化部署、交付、RAG与知识库集成，与求职者的Ollama/vLLM部署及Dify知识库经验高度匹配。",
       "gap": "要求有一定的业务系统对接和代码集成能力，求职者Python技能为1-2百行脚本，复杂系统集成有待验证。",
       "added_date": "2026-11-23",
-      "id": "英视睿达|fde开发工程师/交付开发工程师（大模型）|北京"
+      "id": "英视睿达|fde开发工程师/交付开发工程师大模型|北京"
     }
   ]
 }
