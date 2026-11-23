@@ -1,0 +1,22 @@
+{
+  "updated_at": "2026-11-23 11:29:54",
+  "latest_date": "2026-11-23",
+  "today_new_count": 1,
+  "model": "gemini-3.5-flash-lite",
+  "jobs": [
+    {
+      "title": "FDE开发工程师/交付开发工程师（大模型）",
+      "company": "智联招聘（备注：来源于智联招聘平台发布的具体大模型交付岗位）",
+      "city": "北京",
+      "salary": "1.5-2.5万",
+      "date": "2天前",
+      "url": "https://fdesandbox.zhizuobiao.com/careerfde/do/jobs/j533",
+      "verify_status": "原网页已核验",
+      "track": "AI部署/交付运维",
+      "match": "岗位职责包含大模型私有化部署、Docker/Linux环境及RAG/知识库应用集成，与求职者画像高度吻合",
+      "gap": "要求3-5年工作经验，且可能需要适应一定程度的出差及客户现场工作",
+      "added_date": "2026-11-23",
+      "id": "智联招聘（备注：来源于智联招聘平台发布的具体大模型交付岗位）|fde开发工程师/交付开发工程师（大模型）|北京"
+    }
+  ]
+}
