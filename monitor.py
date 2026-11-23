@@ -29,8 +29,10 @@ BJ_TZ = timezone(timedelta(hours=8))
 MAX_DAILY_NEW = 20
 MAX_HISTORY_JOBS = 300
 
-# 全量外包/驻场/派遣黑名单（覆盖综合IT外包、京津金融/运营商驻场、OD与人力壳公司）
-OUTSOURCE_KEYWORDS = (
+# Python 预过滤只拦两类，语义判断交给 Gemini（不要用“外包/驻场/劳务”等泛词一刀切，
+# 否则会把写着“负责管理第三方外包/驻场人员”的纯甲方岗误杀）
+# ① 明确的外包/人力公司字号；② 明确的外包合同短语
+OUTSOURCE_COMPANY_KEYWORDS = (
     "软通", "中软", "中电金信", "博彦", "亿达", "法本", "诚迈", "文思海辉",
     "微创软件", "润和软件", "纬创", "佰钧成", "汉得", "柯莱特", "信必优", "东软",
     "同方鼎欣", "华路时代", "赛意信息", "海隆软件", "凌志软件", "中和软件",
@@ -42,9 +44,13 @@ OUTSOURCE_KEYWORDS = (
     "首信科技", "百信银行", "深演智能",
     "亚信", "浩鲸", "思特奇", "天源迪科", "东方国信", "直真科技", "亿阳信通",
     "德科", "外企德科", "fesco", "中智", "科锐", "万宝盛华", "任仕达",
-    "前锦", "易才", "人瑞", "金柚", "英格玛", "人力资源", "人力服务", "人才服务",
-    "劳务", "外包", "驻场", "派遣", "外派", "驻点", "华为od", "od岗"
+    "前锦", "易才", "人瑞", "金柚", "英格玛",
 )
+OUTSOURCE_CONTRACT_PHRASES = (
+    "签订外包", "劳务派遣合同", "华为od", "od岗", "属于外包", "人力外包岗",
+)
+# 兼容旧名：预检统一用上面两类
+OUTSOURCE_KEYWORDS = OUTSOURCE_COMPANY_KEYWORDS + OUTSOURCE_CONTRACT_PHRASES
 
 SAFE_NON_OUTSOURCE_WORDS = (
     "非外包", "不外包", "非人力外包", "非驻场", "不驻场",
@@ -57,10 +63,10 @@ CLOSED_PAGE_MARKERS = (
     "已停止招聘", "该岗位已下架", "抱歉，你访问的页面不存在"
 )
 
-# 原网页正文中明确属于外包/驻场合同性质的短语（避免误杀侧边栏推荐公司名）
+# 原网页正文中一旦出现即可直接判定为外包合同岗的短语（只保留明确的合同性质表述，
+# “驻场运维/长期驻场/第三方外包”等泛表述交给 Gemini 按上下文判断，不再一刀切）
 BODY_OUTSOURCE_PHRASES = (
-    "驻场运维", "客户现场驻场", "长期驻场", "人力外包岗", "属于外包",
-    "签订外包", "劳务派遣合同", "第三方外包", "外派至", "华为od"
+    "签订外包", "劳务派遣合同", "华为od", "属于外包", "人力外包岗",
 )
 
 EXCLUDED_TITLE_KEYWORDS = (
@@ -75,25 +81,27 @@ PLATFORM_COMPANY_BLACKLIST = (
     "51job", "拉勾", "脉脉",
 )
 
-# 详情页 URL 锁定：只认单条职位详情页，列表页/聚合页直接丢弃
-# 智联两套格式并存：jobs.zhaopin.com/CC...htm 与 www.zhaopin.com/jobdetail/CC...htm，只认 /jobdetail/ 会误杀一大半
-DETAIL_URL_REGEX = {
-    "zhaopin.com": r"zhaopin\.com/(?:jobdetail/)?CC[A-Z0-9]+\.htm",
-}
-DETAIL_URL_MARKERS = {
-    "liepin.com": ("/job/",),
-    "zhipin.com": ("/job_detail/",),
-    "iguopin.com": ("/job/detail",),
-}
+# URL 黑名单：只剔除明显的城市泛列表页/聚合页，不做平台白名单
+# （飞书招聘 jobs.feishu.cn、Moka app.mokahr.com 等企业直招源无登录墙、必带真实公司名，绝不能拦）
+LIST_URL_BLACKLIST = (
+    "/zhaopin/",    # BOSS 直聘泛列表
+    "/gongsi/",     # BOSS 直聘公司列表
+    "/city-",       # 猎聘城市列表，如 /city-bj/zp.../
+    "/city_",       # 城市列表变体
+    "/c1010",       # BOSS 直聘城市代码路径，如 /c101010100/
+    "zhaopin.com/beijing",
+    "zhaopin.com/tianjin",
+)
 
-# 每日 6 次精准 Google 查询（每月约 180 次，安全控制在 SerpApi 免费 250 次额度内）
+# 每日 6 次 Google 查询（每月约 180 次，安全控制在 SerpApi 免费 250 次额度内）
+# 每条查询控制在 20 个词以内；三个来源分开查：通用关键词、飞书/Moka/国聘企业直招源、猎聘/智联/BOSS 详情页
 SEARCH_PLAN = [
-    ("大数据/系统运维", '("大数据运维" OR "数据平台运维" OR "Hadoop运维") ("北京" OR "天津") (招聘 OR 直招) -软通 -中软 -驻场'),
-    ("大数据/系统运维", '("Linux运维" OR "系统运维工程师") ("北京" OR "天津") ("K8s" OR "Docker" OR "Kafka" OR "Spark") 招聘 -外包 -驻场'),
-    ("大数据/系统运维", '(site:liepin.com/job/ OR site:iguopin.com/job/detail OR site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:zhipin.com/job_detail/) ("大数据运维" OR "数据平台运维") ("北京" OR "天津")'),
-    ("AI部署/交付运维", '("私有化部署" OR "大模型交付" OR "AI交付工程师" OR "大模型运维") ("北京" OR "天津") 招聘 -外包 -算法工程师'),
-    ("AI部署/交付运维", '("vLLM" OR "Ollama" OR "Dify" OR "大模型部署" OR "AI实施") ("北京" OR "天津") (运维 OR 交付 OR 实施) -外包'),
-    ("AI部署/交付运维", '(site:liepin.com/job/ OR site:iguopin.com/job/detail OR site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:zhipin.com/job_detail/) ("私有化部署" OR "AI交付" OR "大模型运维") ("北京" OR "天津")'),
+    ("大数据/系统运维", '("大数据运维" OR "数据平台运维" OR "Hadoop运维" OR "Linux运维") ("北京" OR "天津") (招聘 OR 直招) -软通 -中软'),
+    ("大数据/系统运维", '(site:jobs.feishu.cn OR site:app.mokahr.com OR site:iguopin.com/job/detail) ("大数据运维" OR "数据平台运维") ("北京" OR "天津")'),
+    ("大数据/系统运维", '(site:liepin.com/job/ OR site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:zhipin.com/job_detail/) ("大数据运维" OR "数据平台运维") ("北京" OR "天津")'),
+    ("AI部署/交付运维", '("私有化部署" OR "大模型交付" OR "AI交付工程师" OR "大模型运维" OR "vLLM" OR "Dify" OR "Ollama") ("北京" OR "天津") 招聘 -算法工程师'),
+    ("AI部署/交付运维", '(site:jobs.feishu.cn OR site:app.mokahr.com OR site:iguopin.com/job/detail) ("私有化部署" OR "AI交付" OR "大模型运维") ("北京" OR "天津")'),
+    ("AI部署/交付运维", '(site:liepin.com/job/ OR site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:zhipin.com/job_detail/) ("私有化部署" OR "AI交付" OR "大模型运维") ("北京" OR "天津")'),
 ]
 
 
@@ -191,7 +199,7 @@ def search_serpapi(serpapi_key, query):
         "q": query,
         "hl": "zh-CN",
         "gl": "cn",
-        "tbs": "qdr:w",  # 限定最近一周内收录或更新的网页
+        "tbs": "qdr:m",  # 首次建库放宽到最近一个月活跃页：HR 每天刷新职位，但 URL 可能是两三周前生成的；后续每天有 seen_jobs.json 去重，不会重复推
         "num": "10",
         "api_key": serpapi_key,
     }
@@ -282,6 +290,7 @@ def collect_verified_candidates(serpapi_key):
         log("SerpApi 检索 [{}]: {}".format(track, q[:48]))
         try:
             results = search_serpapi(serpapi_key, q)
+            log("SerpApi 检索 [{}] 返回 {} 条".format(track, len(results)))
         except Exception as e:
             log("SerpApi 单条检索异常: {}".format(e))
             continue
@@ -300,23 +309,10 @@ def collect_verified_candidates(serpapi_key):
             if any(kw in title.lower() for kw in EXCLUDED_TITLE_KEYWORDS):
                 continue
 
-            # 详情页 URL 锁死：三大平台只认单条职位详情页路径，列表页/聚合页直接丢弃
-            # 注意不要在域名前写死 www.：Google 大量收录 m.liepin.com / m.zhipin.com 移动页
-            host = urllib.parse.urlsplit(url).netloc.lower()
-            detail_ok = True
-            regex_pat = next(
-                (p for dom, p in DETAIL_URL_REGEX.items() if dom in host), None
-            )
-            if regex_pat is not None:
-                detail_ok = re.search(regex_pat, url, re.IGNORECASE) is not None
-            else:
-                detail_markers = next(
-                    (m for dom, m in DETAIL_URL_MARKERS.items() if dom in host), None
-                )
-                if detail_markers is not None:
-                    detail_ok = any(mk in url for mk in detail_markers)
-            if not detail_ok:
-                log("非详情页 URL，已剔除: {}".format(url[:80]))
+            # URL 黑名单：只剔除明显的城市泛列表页/聚合页，不做平台白名单
+            # （飞书招聘、Moka 等企业直招源必须放行；域名前不写死 www.，m.liepin.com / m.zhipin.com 也要收）
+            if any(b in url for b in LIST_URL_BLACKLIST):
+                log("泛列表页 URL，已剔除: {}".format(url[:80]))
                 continue
 
             seen_urls.add(url)
@@ -370,7 +366,7 @@ def call_gemini_pure_text(api_key, model_name, prompt_text, max_retries=3):
         except urllib.error.HTTPError as e:
             err = e.read().decode("utf-8", errors="ignore")
             if e.code in (429, 500, 502, 503, 504) and attempt < max_retries:
-                wait_s = 12 * attempt
+                wait_s = 25 * attempt  # 3.8-flash 高峰期 503 是暂时的：等 25s、50s 再降级，别急着切走
                 log("Gemini HTTP {}，等待 {}s 重试...".format(e.code, wait_s))
                 time.sleep(wait_s)
                 continue
@@ -433,16 +429,18 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
 5. 运维开发(SRE研发)、DevOps平台开发、算法工程师、Java/Go后端开发岗
 6. 明确要求 5 年以上大模型或智算经验
 7. company 栏填的是招聘平台名或带“备注”的说明（如智联、猎聘、BOSS直聘、前程无忧、国聘、智联招聘、备注等），不是真实直招企业名——查不到真实企业名就直接丢弃，绝不输出
+8. 当 `webpage_excerpt` 为空（登录墙/安全验证导致没读到正文）时，允许从 `search_title` 或 `snippet` 里的企业署名提取真实公司名（如标题后缀“大数据运维_北京某科技-猎聘”里的“某科技”）；只有当标题和摘要里完全只有“猎聘/智联/某知名企业”且无任何真实字号时，才丢弃该条
 
 【真实性铁律】
 - 只能基于提供的候选数据提取，严禁编造公司名、薪资或要求。
+- 如果 `webpage_excerpt` 为空（登录墙导致没读到正文），优先从 `search_title`/`snippet` 的企业署名里提取真实公司名；只有标题和摘要里完全只有平台名或“某知名企业”且无任何真实字号时，才丢弃该条。
 - 如果 `verify_status` 为 "搜索摘要核验" 且摘要里没写薪资或细节，必须如实把 `salary` 填为 "未知"，并在 `gap` 中注明 "正文受登录墙限制，需点开核对完整JD"。
 - 只输出合法的 JSON 数组，不要任何多余解释：
 [
   {{
     "source_id": 1,
     "title": "清洗后的准确岗位名称",
-    "company": "准确公司名称（若无法确认具体直招公司名则直接丢弃该条）",
+    "company": "准确公司名称（正文为空时可从标题/摘要的企业署名提取；只有标题和摘要里完全只有平台名或“某知名企业”且无任何真实字号时才丢弃该条）",
     "city": "北京 或 天津 或 远程",
     "salary": "真实薪资范围 或 未知",
     "date": "发布时间如 2026-11-22 或 近期 或 未知",
