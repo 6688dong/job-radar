@@ -37,13 +37,25 @@ JOB_PLATFORM_DOMAINS = (
 )
 
 # 技术社区/资讯站：入池前直接跳过，不占 18 条候选名额（按子串匹配，含 aliyun.com/article 这类路径形式）
+# 第七轮补齐招聘聚合站（职友集、看准网等伪装成招聘页的聚合统计站）
 NON_JOB_DOMAINS = (
     "csdn.net", "zhihu.com", "juejin.cn", "cnblogs.com", "51cto.com",
     "jianshu.com", "bilibili.com", "oschina.net", "segmentfault.com",
     "github.com", "gitee.com", "baike.baidu.com", "baijiahao.baidu.com",
     "cloud.tencent.com", "aliyun.com/article", "huaweicloud.com/articles",
     "sohu.com", "163.com", "qq.com", "sina.com.cn", "toutiao.com", "36kr.com", "qbitai.com",
+    "jobui.com", "kanzhun.com", "gaoxiaojob.com", "qimai.cn", "lagou.com/wn",
 )
+
+# 城市汇总/搜索列表页路径特征（对真实 URL 和转换后的 displayed_link 同时生效）
+LIST_PAGE_PATTERNS = (
+    "zhipin.com/zhaopin", "zhipin.com/c1", "zhipin.com/gongsi",
+    "sou.zhaopin.com", "zhaopin.com/sou", "zq.zhaopin.com",
+    "liepin.com/city-", "liepin.com/zp", "liepin.com/company",
+    "iguopin.com/job/list", "/rank/", "/salary/",
+)
+
+LIST_TITLE_REGEX = re.compile(r"(招聘信息|最新招聘|工资待遇|排行榜|公司名录|有哪些)")
 
 # 教程文章标题词：入池前直接跳过
 ARTICLE_TITLE_KEYWORDS = (
@@ -52,16 +64,80 @@ ARTICLE_TITLE_KEYWORDS = (
     "如何部署", "怎么部署", "部署指南", "配置指南", "白皮书", "行业报告",
 )
 
-# JD 结构锚点词：野生站正文里至少出现一个才算招聘帖，否则当文章页剔除
-JD_ANCHOR_WORDS = (
-    "岗位职责", "职位描述", "任职要求", "任职资格", "工作职责",
-    "岗位要求", "月薪", "年薪", "投递简历",
+# 学历硬门槛检测（第七轮新增第 8 码 DEGREE_MASTER_REQUIRED）：两步正则法
+# 第一步先抹掉本科可投的安全表述（“本科及以上，硕士优先”“本科5年/硕士3年”），再判硬性硕博门槛，
+# 否则简单搜“硕士”会误杀大批本科可投的好岗；摘要属性栏“北京 · 5-10年 · 硕士”也要能抓到
+SAFE_DEGREE_RE = re.compile(
+    r"(本科[^。；;\n]{0,22}(?:硕士|研究生|硕博)"
+    r"|(?:硕士|研究生|硕博)(?:研究生)?(?:学历|学位)?\s*(?:优先|更佳|加分|尤佳|可放宽))"
 )
 
-# 模型丢弃判定只允许用这 6 个枚举码，写别的码一律按非法处理（见 filter_with_gemini）
+HARD_MASTER_RE = re.compile(
+    r"(硕士(?:研究生)?\s*及以上"
+    r"|研究生\s*及以上"
+    r"|博士\s*及以上"
+    r"|(?:统招|全日制)?(?:硕士|博士)(?:研究生)?\s*(?:学历|学位)"
+    r"|(?:学历|学位)(?:要求)?\s*[:：为]?\s*(?:统招|全日制)?(?:硕士|研究生|博士)"
+    r"|[·/|丨]\s*(?:统招|全日制)?(?:硕士|硕士研究生|博士)\s*(?:[·/|丨]|$))"
+)
+
+OTHER_CITY_RE = re.compile(
+    r"(保定|安新|雄安|石家庄|廊坊|唐山|沧州|秦皇岛|邯郸|张家口"
+    r"|上海|深圳|广州|杭州|成都|武汉|南京|苏州|西安|重庆|郑州|济南|青岛|长沙|合肥)"
+)
+
+
+def requires_master_degree(text):
+    if not text:
+        return False
+    cleaned = SAFE_DEGREE_RE.sub("", str(text))
+    return bool(HARD_MASTER_RE.search(cleaned))
+
+
+def has_valid_bj_tj_signal(title, snippet, page_text, company=""):
+    """剥离公司名后检查是否真有北京/天津/远程信号，拦截“天津公司招保定岗”"""
+    combined = "{} {} {}".format(title or "", snippet or "", page_text or "")
+    if company:
+        combined = combined.replace(company, "")
+        short_comp = CORP_NOISE_RE.sub("", company)
+        if len(short_comp) >= 2:
+            combined = combined.replace(short_comp, "")
+    # 剥离公司名后完全没有京津远程字样 -> 仅靠公司名混入，直接判假
+    if not any(loc in combined for loc in ("北京", "天津", "远程", "居家办公")):
+        return False
+    # 若为无正文的摘要快照卡，且剥离公司名后标题/摘要前段直接出现外地城市而无京津工作地，拦截
+    if not page_text:
+        head = "{} {}".format(title or "", snippet or "")
+        if company:
+            head = head.replace(company, "")
+        if OTHER_CITY_RE.search(head) and not any(k in head for k in ("北京", "天津", "远程")):
+            return False
+    return True
+
+
+def fix_truncated_title(title, snippet):
+    """修补被智联 <title> 字数硬截断的未闭合括号标题（如“大模型推理部署工程师(工程”）"""
+    title = str(title or "")
+    snippet = str(snippet or "")
+    if title.count("(") + title.count("（") <= title.count(")") + title.count("）"):
+        return title
+    m = re.search(re.escape(title) + r"[^)）\s]{0,12}[)）]", snippet)
+    if m:
+        return m.group(0)
+    return title + ")"
+
+
+# JD 结构锚点词：野生站正文里至少出现一个才算招聘帖，否则当文章页剔除
+# 第七轮：正文须命中至少 1 个锚点词才算“原网页已核验”，防 2KB 反爬提示页蒙混过关
+JD_ANCHOR_WORDS = (
+    "岗位职责", "职位描述", "任职要求", "任职资格", "工作职责",
+    "岗位要求", "月薪", "年薪", "投递简历", "经验",
+)
+
+# 模型丢弃判定只允许用这 8 个枚举码，写别的码一律按非法处理（见 filter_with_gemini 的硬锁 + 纠偏复核）
 ALLOWED_DROP_CODES = {
-    "OUTSOURCE_OR_RPO", "NOT_JOB_POST", "WRONG_CITY",
-    "PURE_DEV_OR_NON_OPS", "HPC_GPU_CLUSTER", "LLM_5Y_EXP",
+    "OUTSOURCE_OR_RPO", "NOT_JOB_POST", "EXPIRED_OR_CLOSED", "WRONG_CITY",
+    "PURE_DEV_OR_NON_OPS", "HPC_GPU_CLUSTER", "LLM_5Y_EXP", "DEGREE_MASTER_REQUIRED",
 }
 
 # Python 预过滤只拦两类，语义判断交给 Gemini（不要用“外包/驻场/劳务”等泛词一刀切，
@@ -133,12 +209,12 @@ LIST_URL_BLACKLIST = (
 # 宽泛搜索保留 qdr:m 防陈旧列表页。每条查询控制在 20 个词以内，每条只放 1～2 个 site:。
 # SEARCH_PLAN 每项为 (方向, 查询词, tbs)，tbs 为 None 表示不限时间
 SEARCH_PLAN = [
-    ("大数据/系统运维", '(site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail) (大数据 OR Hadoop OR Kafka OR 数据平台) 运维 ("北京" OR "天津")', None),
+    ("大数据/系统运维", '(site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail) (大数据 OR Hadoop OR Kafka OR 数据平台) 运维 ("北京" OR "天津")', "qdr:m"),
     ("大数据/系统运维", '(site:liepin.com/job OR site:iguopin.com/job/detail) (大数据 OR Hadoop OR Kafka OR 数据平台) 运维 ("北京" OR "天津")', None),
     ("大数据/系统运维", '(site:zhipin.com/job_detail OR 直招 OR 招聘) ("大数据运维" OR "数据平台运维" OR "Hadoop运维") ("北京" OR "天津")', "qdr:m"),
-    ("AI部署/交付运维", '(site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:iguopin.com/job/detail) ("大模型" OR "私有化部署" OR "AI交付" OR "知识库") (交付 OR 运维 OR 部署) (北京 OR 天津)', None),
+    ("AI部署/交付运维", '(site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:iguopin.com/job/detail) ("大模型" OR "私有化部署" OR "AI交付" OR "知识库") (交付 OR 运维 OR 部署) (北京 OR 天津)', "qdr:m"),
     ("AI部署/交付运维", '(site:liepin.com/job OR site:zhipin.com/job_detail OR site:jobs.feishu.cn OR site:mokahr.com) ("大模型" OR "AI交付" OR "vLLM" OR "Dify" OR "FDE") (交付 OR 运维 OR 部署) (北京 OR 天津)', None),
-    ("AI部署/交付运维", '("大模型交付" OR "AI交付" OR "大模型运维" OR "私有化部署" OR "FDE") ("岗位职责" OR "任职要求") (北京 OR 天津) -外包 -教程 -site:csdn.net -site:zhihu.com -site:juejin.cn', "qdr:m"),
+    ("AI部署/交付运维", '("大模型交付" OR "AI交付" OR "大模型运维" OR "私有化部署" OR "FDE") ("岗位职责" OR "任职要求") (北京 OR 天津) -外包 -教程 -site:csdn.net -site:zhihu.com -site:juejin.cn -site:jobui.com -site:kanzhun.com -inurl:zhaopin/', "qdr:m"),
 ]
 
 
@@ -276,6 +352,8 @@ def resolve_google_goto(u):
     只能发一次轻量请求从响应头剥真实地址。必须单跳不跟随：如果顺手跟随第二跳，
     目标招聘站一旦反爬超时，第一跳已经吐出来的真实地址也会跟着丢掉。
     非 goto 链接原样返回；解不开时也原样返回，绝不丢数据。
+    第七轮补充：收到 HTTP 200 时顺手读前 8KB 文本，用 meta refresh 正则多解一批
+    轻量跳转页；遇到 Google 读秒验证页（"Verifying your request"）直接返回原 goto 链接不死等。
     """
     u = str(u or "").strip()
     parsed = urllib.parse.urlsplit(u)
@@ -293,7 +371,19 @@ def resolve_google_goto(u):
         })
         with opener.open(req, timeout=10) as resp:
             loc = resp.headers.get("Location")
-            return loc.strip() if loc else u
+            if loc:
+                return loc.strip()
+            # HTTP 200：轻量跳转页可能用 meta refresh 藏真实地址
+            try:
+                head = resp.read(8192).decode("utf-8", errors="ignore")
+            except Exception:
+                return u
+            if "Verifying your request" in head:
+                return u
+            m = re.search(r'''meta\s+http-equiv=["']?refresh["']?[^>]*url=([^"'>\s]+)''', head, re.I)
+            if m:
+                return m.group(1).strip()
+            return u
     except urllib.error.HTTPError as e:
         # 不跟随的 opener 会把 302 抛成 HTTPError，Location 就在它的响应头里
         loc = e.headers.get("Location") if e.headers else None
@@ -312,8 +402,16 @@ def fetch_and_verify_candidate(item):
         ),
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     }
-    item["verify_status"] = "搜索摘要核验"
+    # 第七轮：未读到正文的候选统一标为“摘要快照·待核实”（原“搜索摘要核验”）
+    item["verify_status"] = "摘要快照·待核实"
     item["page_text"] = ""
+
+    # 第七轮铁律一：无时间锁（tbs=None）又读不到原网页的候选一律丢弃，
+    # 封死“陈旧缓存 + 抓不到原页”的双盲漏洞（宝石花假卡的根因）
+    def snippet_or_drop():
+        if item.get("query_tbs") is None:
+            return None
+        return item
 
     try:
         ctx = ssl.create_default_context()
@@ -328,9 +426,9 @@ def fetch_and_verify_candidate(item):
     except urllib.error.HTTPError as e:
         if e.code in (404, 410):
             return None
-        return item
+        return snippet_or_drop()
     except Exception:
-        return item
+        return snippet_or_drop()
 
     parser = PlainTextExtractor()
     try:
@@ -340,7 +438,7 @@ def fetch_and_verify_candidate(item):
         text = ""
 
     if not text or len(text) < 120:
-        return item
+        return snippet_or_drop()
 
     if any(m in text for m in CLOSED_PAGE_MARKERS):
         log("剔除已下架/关闭页面: {}".format(item["title"][:40]))
@@ -349,7 +447,7 @@ def fetch_and_verify_candidate(item):
     # 登录墙/安全验证页识别：保留搜索摘要但诚实标注未读到正文
     login_wall_signals = ("请完成安全验证", "扫码登录", "登录后查看", "security-check", "验证码登录")
     if len(text) < 350 and any(s in text.lower() for s in login_wall_signals):
-        return item
+        return snippet_or_drop()
 
     # 野生站 JD 锚点校验：不在招聘平台域名里的站，正文须含至少一个招聘结构词，
     # 否则就是教程/资讯文章页，直接剔除（正文不足 350 字时不判，留给摘要核验）
@@ -358,10 +456,24 @@ def fetch_and_verify_candidate(item):
             log("剔除非招聘文章页: {}".format(item["title"][:40]))
             return None
 
+    # 第七轮：正文须 len>=200 且命中至少 1 个 JD 锚点词才算“原网页已核验”，
+    # 防止 2KB 反爬提示页（智联 acw_sc__v2 挑战页）蒙混过关
+    if len(text) < 200 or not any(w in text for w in JD_ANCHOR_WORDS):
+        return snippet_or_drop()
+
     cleaned_body = strip_safe_words(text[:3000])
     hit_phrase = next((p for p in BODY_OUTSOURCE_PHRASES if p in cleaned_body), None)
     if hit_phrase:
         log("原网页正文命中驻场/外包短语('{}')，已剔除: {}".format(hit_phrase, item["title"][:40]))
+        return None
+
+    # 第七轮：正文核验通过后再跑一次硕士 + 城市双校验（带正文）
+    full_text = "{} {} {}".format(item.get("title", ""), item.get("snippet", ""), text[:3000])
+    if requires_master_degree(full_text):
+        log("正文命中硬性硕士学历要求，已剔除: {}".format(item["title"][:40]))
+        return None
+    if not has_valid_bj_tj_signal(item.get("title", ""), item.get("snippet", ""), text[:3000]):
+        log("正文核验后无京津工作地信号，已剔除: {}".format(item["title"][:40]))
         return None
 
     item["verify_status"] = "原网页已核验"
@@ -389,7 +501,13 @@ def collect_verified_candidates(serpapi_key):
         for r in results:
             # 先解开 google.com/goto 跳转再 normalize 和去重：goto 里可能藏着列表页或重复链接，
             # 不先解开会白白占掉每赛道 18 条的宝贵名额
-            url = normalize_url(resolve_google_goto(r.get("link")))
+            raw_link = r.get("link") or ""
+            # 第七轮：SerpApi 的 displayed_link 和 source 是明文，goto 加密解不开也能透视过滤
+            disp_link = str(r.get("displayed_link") or "").strip()
+            source_name = str(r.get("source") or "").strip()
+            # 将 "https://m.zhipin.com › zhaopin" 还原为可匹配的路径形态 "https://m.zhipin.com/zhaopin"
+            disp_norm = re.sub(r"\s*›\s*", "/", disp_link.lower())
+            url = normalize_url(resolve_google_goto(raw_link))
             title = str(r.get("title") or "").strip()
             snippet = str(r.get("snippet") or "").strip()
             date_hint = str(r.get("date") or "").strip()
@@ -402,14 +520,22 @@ def collect_verified_candidates(serpapi_key):
             if any(kw in title.lower() for kw in EXCLUDED_TITLE_KEYWORDS):
                 continue
 
-            # 教程文章硬过滤（入池前，不占 18 条候选名额）：技术社区/资讯站域名一律跳过；
+            # 教程文章与聚合站硬过滤（入池前，不占 18 条候选名额）：技术社区/资讯站/招聘聚合站域名一律跳过；
+            # 列表页路径与标题特征同时对真实 URL 和 displayed_link 生效，套 goto 外衣的垃圾站也能透视拦截；
             # 教程标题词只拦非招聘平台站（平台站上的真招聘帖标题也可能带“全流程”这类词）
-            url_lower = url.lower()
-            if any(d in url_lower for d in NON_JOB_DOMAINS):
-                log("技术社区/资讯站，已剔除: {} | {}".format(
-                    next(d for d in NON_JOB_DOMAINS if d in url_lower), title[:40]))
+            check_targets = url.lower() + " " + disp_norm
+            hit_domain = next((d for d in NON_JOB_DOMAINS if d in check_targets), None)
+            if hit_domain:
+                log("技术社区/聚合站('{}')，已剔除: {}".format(hit_domain, title[:40]))
                 continue
-            is_known_job_site = any(d in url_lower for d in JOB_PLATFORM_DOMAINS)
+            hit_list_pat = next((p for p in LIST_PAGE_PATTERNS if p in check_targets), None)
+            if hit_list_pat:
+                log("列表页路径('{}')，已剔除: {}".format(hit_list_pat, title[:40]))
+                continue
+            if LIST_TITLE_REGEX.search(title):
+                log("列表页标题特征，已剔除: {}".format(title[:40]))
+                continue
+            is_known_job_site = any(d in url.lower() for d in JOB_PLATFORM_DOMAINS)
             if not is_known_job_site and any(k in title for k in ARTICLE_TITLE_KEYWORDS):
                 log("教程文章标题词('{}')，已剔除: {}".format(
                     next(k for k in ARTICLE_TITLE_KEYWORDS if k in title), title[:40]))
@@ -428,6 +554,8 @@ def collect_verified_candidates(serpapi_key):
                 "title": title,
                 "snippet": snippet,
                 "date_hint": date_hint,
+                "query_tbs": tbs,
+                "source_hint": "{} ({})".format(source_name, disp_link).strip(),
             })
         time.sleep(1)
 
@@ -548,6 +676,7 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
             "snippet": c["snippet"],
             "verify_status": c["verify_status"],
             "webpage_excerpt": c["page_text"],
+            "source_hint": c.get("source_hint", ""),
         })
 
     prompt = """
@@ -567,21 +696,28 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
 2. 甲方不限行业：只要是非外包的企业自招/直招，无论是银行金融、车企制造、农业科技、物流快递、能源国企、医疗零售还是互联网，一律平等保留！严禁以行业不符为由丢弃！
 3. 薪资不设上限：40-60K 等高薪岗位绝不可因薪资高或职级高而丢弃！资历要求偏高（如要求5-10年大数据经验）一律保留并在 gap 中注明。
 
-【仅允许的 6 类淘汰码（drop_code）】
-只有命中以下 6 条之一的候选才能判为 "drop"，未命中任何一条的必须判为 "keep"：
+【仅允许的 8 类淘汰码（drop_code）】
+只有命中以下 8 条之一的候选才能判为 "drop"，未命中任何一条的必须判为 "keep"：
 - OUTSOURCE_OR_RPO：IT外包、金融/运营商驻场乙方、劳务派遣、华为OD、猎头匿名代招（无真实甲方企业名）
 - NOT_JOB_POST：技术教程/科普文章、城市职位汇总列表页、无具体公司名、或明确已停止招聘
+- EXPIRED_OR_CLOSED：页面或摘要明确显示该岗位已停止招聘、已下线，或发布/截止日期早于 2026 年且明显过期
 - WRONG_CITY：工作城市既不在北京（含下辖各区）、也不在天津（含下辖各区）、也不是远程
 - PURE_DEV_OR_NON_OPS：纯Java/Go/C++/前端研发、算法工程师、要求重度Go/Java编码的运维平台开发岗、数据运营/数据标注岗
 - HPC_GPU_CLUSTER：纯千卡智算中心底座、RDMA/InfiniBand/NCCL训练集群组网岗（注意：大模型私有化部署/AI交付/FDE/RAG实施必须保留！）
 - LLM_5Y_EXP：明确硬性要求 5 年以上大模型或智算从业经验（注意：要求5年以上传统Linux/Hadoop大数据经验不在此列，应保留！）
+- DEGREE_MASTER_REQUIRED：任职要求硬性规定硕士研究生及以上学历（注意：若写“本科及以上，硕士优先”或“本科5年/硕士3年”属于本科可投，必须保留，严禁误判！）
+
+【单页识别、括号修补与工作地核验硬规则】
+1. 凡 url 或 source_hint 中包含 job_detail、liepin.com/job、zhaopin.com/jobdetail、jobs.zhaopin.com/CC、iguopin.com/job/detail、feishu.cn、mokahr.com 的候选，100% 属于单条真实职位详情页（BOSS直聘单页标题本来就是“岗位名称-北京”格式），严禁将其误判为城市职位汇总列表页（NOT_JOB_POST）！只要能从 search_title 或 snippet 中确认具体直招企业名称（非“某大型科技公司”等匿名代招），即使正文受登录墙限制为空，也必须按规则保留。
+2. 若 search_title 末尾存在未闭合的左括号截断（例如“大模型推理部署工程师(工程”），请优先结合 snippet 中的完整职位名补全括号内容；若 snippet 中也无更多后缀字样，则补齐闭合右括号。
+3. 严禁根据公司名称中的城市字样（例如“天津某某公司”“某某(北京)科技”）推断工作地点！必须确认除公司名称之外，职位标题、属性栏或正文中明确标示工作地点在北京（含下辖各区）、天津（含下辖各区）或远程；若实际工作地为保定、廊坊、石家庄等其他城市，必须判为 WRONG_CITY 丢弃。
 
 【真实性铁律】
 - 只能基于提供的候选数据提取，严禁编造公司名、薪资或要求。
 - 如果 `webpage_excerpt` 为空（登录墙导致没读到正文），优先从 `search_title`/`snippet` 的企业署名里提取真实公司名；只有标题和摘要里完全只有平台名或“某知名企业”且无任何真实字号时，才丢弃该条。
-- 如果 `verify_status` 为 "搜索摘要核验" 且摘要里没写薪资或细节，必须如实把 `salary` 填为 "未知"，并在 `gap` 中注明 "正文受登录墙限制，需点开核对完整JD"。
+- 如果 `verify_status` 为 "摘要快照·待核实" 且摘要里没写薪资或细节，必须如实把 `salary` 填为 "未知"，并在 `gap` 中注明 "正文受登录墙限制，需点开核对完整JD"。
 - 只输出合法的 JSON 数组，不要任何多余解释。数组必须包含输入中每一个 source_id 的判定，严禁遗漏任何一条（拿不准也不许跳过）：
-  - 若丢弃：{{"source_id": 1, "decision": "drop", "drop_code": "必须严格填写上述6个枚举码之一", "reason": "一句话事实依据"}}
+  - 若丢弃：{{"source_id": 1, "decision": "drop", "drop_code": "必须严格填写上述8个枚举码之一", "reason": "一句话事实依据"}}
   - 若保留：{{"source_id": 2, "decision": "keep", "title": "原帖准确岗位名称（不要把标题和正文里的不同叫法拼在一起）", "company": "准确公司名称（正文为空时可从标题/摘要的企业署名提取；只有标题和摘要里完全只有平台名或“某知名企业”且无任何真实字号时才丢弃该条）", "city": "北京 或 天津 或 远程", "salary": "真实薪资范围 或 未知", "date": "发布时间如 2026-11-22 或 近期 或 未知", "match": "一句话说明与求职者画像的匹配点", "gap": "一句话说明岗位要求中求职者尚不具备的技能差距"}}
 - 若全部不符合，也要逐条输出 drop 判定，不要只输出 []。
 
@@ -615,37 +751,22 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
     log("方向 [{}] 实际使用模型: {}".format(track_label, used_model))
     parsed = extract_json_array(raw_reply)
 
-    final_jobs = []
-    for item in parsed:
-        try:
-            sid = int(item.get("source_id"))
-        except Exception:
-            continue
-        if sid not in id_map:
-            continue
-
-        orig = id_map[sid]
-        # 丢弃审计日志：非 keep 一律丢弃，淘汰码原样打进日志（缺码记 INVALID_CODE，编造的码也会原样现形）
-        if item.get("decision") != "keep":
-            d_code = str(item.get("drop_code") or "INVALID_CODE").strip()
-            log("[DROP #{}][{}][{}] {} | 原标题: {}".format(
-                sid, d_code, orig["verify_status"], item.get("reason", ""), orig["title"][:45]
-            ))
-            continue
-        title = str(item.get("title") or "").strip()
+    def process_keep(item, orig, sid):
+        """模型判 keep 后的 Python 终审：标题/公司/城市/外包/排除词 + 第七轮硕士与城市双保险"""
+        title = fix_truncated_title(str(item.get("title") or "").strip(), orig.get("snippet", ""))
         company = str(item.get("company") or "").strip()
         city = str(item.get("city") or "").strip()
         if not title or not company or company in ("未知", "某公司", "某知名企业", "猎头代招"):
             log("[DROP #{}][NOT_JOB_POST] 原因: 标题或公司名缺失 | 原标题: {}".format(sid, orig["title"][:40]))
-            continue
+            return None
         # 平台名冒充公司名：代码层硬性拦截，查不到真实企业名一律丢弃
         hit_platform = next((kw for kw in PLATFORM_COMPANY_BLACKLIST if kw in company), None)
         if hit_platform:
             log("[DROP #{}][NOT_JOB_POST] 原因: Python 终审拦截平台名冒充公司名('{}') | {} | {}".format(sid, hit_platform, company, title))
-            continue
+            return None
         if not any(c in city for c in ("北京", "天津", "远程")):
             log("[DROP #{}][WRONG_CITY] 原因: 城市不在北京/天津/远程 ({}) | {} | {}".format(sid, city, company, title))
-            continue
+            return None
 
         check_str = strip_safe_words("{} {} {} {}".format(
             company, title, item.get("match", ""), item.get("gap", "")
@@ -653,12 +774,20 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
         hit_out = next((kw for kw in OUTSOURCE_KEYWORDS if kw in check_str), None)
         if hit_out:
             log("[DROP #{}][OUTSOURCE_OR_RPO] 原因: Python 终审拦截外包词('{}') | {} | {}".format(sid, hit_out, company, title))
-            continue
+            return None
         if any(kw in title.lower() for kw in EXCLUDED_TITLE_KEYWORDS):
             log("[DROP #{}][NOT_JOB_POST] 原因: 标题命中排除词 | {} | {}".format(sid, company, title))
-            continue
+            return None
 
-        final_jobs.append({
+        # 第七轮双保险：模型判 keep 后再跑一次硕士硬门槛与剥离公司名后的城市校验
+        if requires_master_degree("{} {} {}".format(title, item.get("match", ""), item.get("gap", ""))):
+            log("[DROP #{}][DEGREE_MASTER_REQUIRED] 原因: Python 终审拦截硬性硕士学历要求 | {} | {}".format(sid, company, title))
+            return None
+        if not has_valid_bj_tj_signal(orig.get("title", ""), orig.get("snippet", ""), orig.get("page_text", ""), company):
+            log("[DROP #{}][WRONG_CITY] 原因: 剥离公司名后无京津工作地信号 | {} | {}".format(sid, company, title))
+            return None
+
+        return {
             "title": title,
             "company": company,
             "city": city,
@@ -669,15 +798,152 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
             "track": track_label,
             "match": str(item.get("match") or "无").strip(),
             "gap": str(item.get("gap") or "无").strip(),
-        })
+        }
+
+    def re_review_illegal(illegal_items):
+        """第七轮硬锁：模型用了非法淘汰码，不准直接丢弃——单独发一次极短的纠偏复核，
+        强制只能在 8 个合法码里重选，选不出就必须 keep 并输出完整卡片字段。"""
+        re_indexed = []
+        for sid, _item, orig, d_code in illegal_items:
+            re_indexed.append({
+                "source_id": sid,
+                "search_title": orig["title"],
+                "snippet": orig["snippet"],
+                "verify_status": orig["verify_status"],
+                "webpage_excerpt": orig["page_text"],
+                "source_hint": orig.get("source_hint", ""),
+                "illegal_code_used": d_code,
+            })
+        re_prompt = (
+            "你是极其严谨的求职情报审核员。下面 {n} 条候选在上一轮被判为 drop，但使用的淘汰码不在合法清单内，"
+            "现严格重审。合法淘汰码只有 8 个：OUTSOURCE_OR_RPO、NOT_JOB_POST、EXPIRED_OR_CLOSED、WRONG_CITY、"
+            "PURE_DEV_OR_NON_OPS、HPC_GPU_CLUSTER、LLM_5Y_EXP、DEGREE_MASTER_REQUIRED。"
+            "若未命中其中之一，必须输出 decision: keep 及完整岗位字段（title、company、city、salary、date、match、gap）。"
+            "只输出合法 JSON 数组，不要任何多余解释。候选数据如下：\n{data}"
+        ).format(n=len(re_indexed), data=json.dumps(re_indexed, ensure_ascii=False, indent=2))
+        try:
+            re_raw = call_gemini_pure_text(api_key, model_names[0], re_prompt)
+            return extract_json_array(re_raw)
+        except Exception as e:
+            log("纠偏复核调用失败，非法码候选按 keep 处理: {}".format(str(e)[:200]))
+            return None
+
+    final_jobs = []
+    illegal_items = []
+    for item in parsed:
+        try:
+            sid = int(item.get("source_id"))
+        except Exception:
+            continue
+        if sid not in id_map:
+            continue
+
+        orig = id_map[sid]
+        # 第七轮硬锁：非 keep 一律先验码——合法码原样打日志丢弃；非法码不准直接丢弃，攒起来纠偏复核
+        if item.get("decision") != "keep":
+            d_code = str(item.get("drop_code") or "INVALID_CODE").strip()
+            if d_code in ALLOWED_DROP_CODES:
+                log("[DROP #{}][{}][{}] {} | 原标题: {}".format(
+                    sid, d_code, orig["verify_status"], item.get("reason", ""), orig["title"][:45]
+                ))
+            else:
+                log("[ILLEGAL_DROP_BLOCKED #{}][{}] 模型编造淘汰码，已拦截待复核 | 原标题: {}".format(
+                    sid, d_code, orig["title"][:45]
+                ))
+                illegal_items.append((sid, item, orig, d_code))
+            continue
+        job = process_keep(item, orig, sid)
+        if job is not None:
+            final_jobs.append(job)
+
+    # 纠偏复核：非法码候选重审（复核失败时按 keep 处理，绝不直接丢弃）
+    if illegal_items:
+        log("纠偏复核 {} 条非法码候选...".format(len(illegal_items)))
+        re_parsed = re_review_illegal(illegal_items)
+        if re_parsed is None:
+            for sid, item, orig, _d_code in illegal_items:
+                job = process_keep(dict(item, decision="keep"), orig, sid)
+                if job is not None:
+                    final_jobs.append(job)
+        else:
+            re_map = {}
+            for r in re_parsed:
+                try:
+                    re_map[int(r.get("source_id"))] = r
+                except Exception:
+                    continue
+            for sid, item, orig, d_code in illegal_items:
+                r = re_map.get(sid)
+                if r is None:
+                    log("[ILLEGAL_DROP_BLOCKED #{}] 复核未返回该条，按 keep 处理 | 原标题: {}".format(sid, orig["title"][:45]))
+                    job = process_keep(dict(item, decision="keep"), orig, sid)
+                    if job is not None:
+                        final_jobs.append(job)
+                    continue
+                if r.get("decision") != "keep":
+                    re_code = str(r.get("drop_code") or "INVALID_CODE").strip()
+                    if re_code in ALLOWED_DROP_CODES:
+                        log("[DROP #{}][{}][{}] {} | 原标题: {}".format(
+                            sid, re_code, orig["verify_status"], r.get("reason", ""), orig["title"][:45]
+                        ))
+                    else:
+                        log("[ILLEGAL_DROP_BLOCKED #{}][{}] 复核仍用非法码，按 keep 处理 | 原标题: {}".format(
+                            sid, re_code, orig["title"][:45]
+                        ))
+                        job = process_keep(dict(r, decision="keep"), orig, sid)
+                        if job is not None:
+                            final_jobs.append(job)
+                    continue
+                job = process_keep(r, orig, sid)
+                if job is not None:
+                    final_jobs.append(job)
+
     return final_jobs, used_model
 
 
+# 公司名剥壳：去全称/简称后缀与地域括号，同一家公司只留核心字号
+CORP_NOISE_RE = re.compile(
+    r"(股份有限公司|有限责任公司|有限公司|集团|控股"
+    r"|信息技术|网络技术|数字科技|科技发展|系统技术|软件科技|科技"
+    r"|\(北京\)|（北京）|\(天津\)|（天津）)"
+)
+
+
 def make_fingerprint(j):
-    comp = re.sub(r"\s+", "", j.get("company", "")).lower()
-    title = re.sub(r"\s+", "", j.get("title", "")).lower()
-    city = re.sub(r"\s+", "", j.get("city", "")).lower()
-    return "{}|{}|{}".format(comp, title, city)
+    raw_comp = re.sub(r"\s+", "", str(j.get("company") or "")).lower()
+    core_comp = CORP_NOISE_RE.sub("", raw_comp) or raw_comp
+    raw_title = str(j.get("title") or "").lower()
+    clean_title = re.sub(r"[\s()（）\-—_]+", "", raw_title)
+    raw_city = str(j.get("city") or "")
+    if "北京" in raw_city:
+        city = "北京"
+    elif "天津" in raw_city:
+        city = "天津"
+    else:
+        city = re.sub(r"\s+", "", raw_city)
+    return "{}|{}|{}".format(core_comp, clean_title, city)
+
+
+def make_canonical_url_key(url):
+    """规范职位唯一键：三大平台提职位 ID，跨 PC/移动端/新旧域名通吃；goto 链接解不开不参与去重"""
+    u = str(url or "").strip()
+    if not u or "google.com/goto" in u:
+        return ""
+    m_lp = re.search(r"liepin\.com/job/(\d+)", u)
+    if m_lp:
+        return "url:liepin:" + m_lp.group(1)
+    m_zp = re.search(r"zhaopin\.com/(?:jobdetail/)?(CC[A-Z0-9]+)\.htm", u, re.I)
+    if m_zp:
+        return "url:zhaopin:" + m_zp.group(1).upper()
+    m_boss = re.search(r"zhipin\.com/job_detail/([A-Za-z0-9_~]+)\.html", u)
+    if m_boss:
+        return "url:zhipin:" + m_boss.group(1)
+    m_gp = re.search(r"iguopin\.com/job/detail\?id=(\d+)", u)
+    if m_gp:
+        return "url:iguopin:" + m_gp.group(1)
+    parsed = urllib.parse.urlsplit(u.lower())
+    host = re.sub(r"^m\.", "www.", parsed.netloc)
+    return "url:{}://{}{}".format("https", host, parsed.path.rstrip("/"))
 
 
 def load_json(path, default):
@@ -710,6 +976,8 @@ def build_email_bodies(job_list, today_str, page_url):
     for idx, j in enumerate(job_list, 1):
         search_kw = urllib.parse.quote("{} {} {} 招聘".format(j["company"], j["title"], j["city"]))
         google_url = "https://www.google.com/search?q={}".format(search_kw)
+        # 第七轮：仍为 google.com/goto 的卡片，按钮明确标为 Google 跳转
+        btn_label = "打开原招聘页 (Google跳转)" if ("google.com/goto" in j["url"] or "google.com/url" in j["url"]) else "打开原招聘页 &rarr;"
 
         plain_lines.append("#{}. [{}] {} | {} | {} | {}".format(
             idx, j["verify_status"], j["title"], j["company"], j["city"], j["salary"]
@@ -742,7 +1010,7 @@ def build_email_bodies(job_list, today_str, page_url):
                 <strong>差距：</strong>{gap}
               </div>
               <div style="margin-top:12px;">
-                <a href="{url}" target="_blank" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-size:13px;font-weight:600;padding:7px 14px;border-radius:6px;margin-right:8px;">打开原招聘页 &rarr;</a>
+                <a href="{url}" target="_blank" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-size:13px;font-weight:600;padding:7px 14px;border-radius:6px;margin-right:8px;">{btn_label}</a>
                 <a href="{g_url}" target="_blank" style="display:inline-block;background:#f3f4f6;color:#374151;border:1px solid #d1d5db;text-decoration:none;font-size:12px;padding:6px 11px;border-radius:6px;">Google 核验</a>
               </div>
             </td>
@@ -763,6 +1031,7 @@ def build_email_bodies(job_list, today_str, page_url):
             gap=html.escape(j["gap"]),
             url=html.escape(j["url"], quote=True),
             g_url=html.escape(google_url, quote=True),
+            btn_label=btn_label,
         )
         cards_html.append(card)
 
@@ -854,19 +1123,41 @@ def main():
     seen_dict = load_json(SEEN_FILE, {})
     if not isinstance(seen_dict, dict):
         seen_dict = {}
+    # 第七轮指纹格式迁移：旧版指纹（带公司后缀、标题含括号/横线）一次性转成新格式，
+    # 否则全部历史岗位会被当成新岗重推；转完保留旧键无害
+    for _old_key in list(seen_dict.keys()):
+        try:
+            _parts = str(_old_key).split("|")
+            if len(_parts) != 3:
+                continue
+            _c, _t, _ct = _parts
+            _nc = CORP_NOISE_RE.sub("", _c) or _c
+            _nt = re.sub(r"[\s()（）\-—_]+", "", _t)
+            _nct = "北京" if "北京" in _ct else ("天津" if "天津" in _ct else _ct)
+            _new_key = "{}|{}|{}".format(_nc, _nt, _nct)
+            if _new_key not in seen_dict:
+                seen_dict[_new_key] = seen_dict[_old_key]
+        except Exception:
+            continue
 
+    # 第七轮双键联合去重：公司指纹与规范 URL 键任一命中即判重，根治 m./www. 与公司全简称重复
     new_jobs = []
-    batch_fp = set()
+    batch_seen = set()
     for j in all_filtered:
         fp = make_fingerprint(j)
-        if fp in seen_dict or fp in batch_fp:
+        url_key = make_canonical_url_key(j.get("url"))
+        if fp in seen_dict or fp in batch_seen or (url_key and (url_key in seen_dict or url_key in batch_seen)):
             continue
-        batch_fp.add(fp)
+        batch_seen.add(fp)
+        if url_key:
+            batch_seen.add(url_key)
         j["added_date"] = today_str
         j["id"] = fp
         new_jobs.append(j)
         if len(new_jobs) >= MAX_DAILY_NEW:
             break
+    # 第七轮铁律三：同批次新卡按核验状态排序，“原网页已核验”永远排在摘要快照卡前面
+    new_jobs.sort(key=lambda j: 0 if j.get("verify_status") == "原网页已核验" else 1)
 
     log("去重后今日新增岗位: {} 条".format(len(new_jobs)))
 
@@ -875,7 +1166,17 @@ def main():
     old_jobs = board_data.get("jobs") if isinstance(board_data, dict) else []
     if not isinstance(old_jobs, list):
         old_jobs = []
-    # 顺手清脏数据：历史卡片里带 google.com/goto 的链接也解开写回干净地址，解不开就保留原链接
+    # 第七轮存量体检：先算出硕士岗的指纹/URL 键（同职位不同快照的重复卡一并清理），
+    # 再逐条过 goto 洗净、硕士过滤、括号补全、旧标签改名与双键去重
+    blocked_keys = set()
+    for oj in old_jobs:
+        if requires_master_degree(str(oj.get("title", "")) + " " + str(oj.get("gap", ""))):
+            blocked_keys.add(make_fingerprint(oj))
+            uk = make_canonical_url_key(oj.get("url"))
+            if uk:
+                blocked_keys.add(uk)
+    cleaned_old = []
+    seen_old_keys = set()
     for oj in old_jobs:
         u = str(oj.get("url") or "")
         if "google.com/goto" in u or "google.com/url" in u:
@@ -883,6 +1184,23 @@ def main():
             if clean and clean != u:
                 log("历史卡片链接已洗净: {} -> {}".format(u[:50], clean[:80]))
                 oj["url"] = clean
+        oj_fp = make_fingerprint(oj)
+        oj_uk = make_canonical_url_key(oj.get("url"))
+        oj["id"] = oj_fp
+        if oj_fp in blocked_keys or (oj_uk and oj_uk in blocked_keys):
+            log("存量硕士岗，已清理: {} | {}".format(oj.get("company"), oj.get("title", "")[:40]))
+            continue
+        oj["title"] = fix_truncated_title(str(oj.get("title", "")), "")
+        if oj.get("verify_status") == "搜索摘要核验":
+            oj["verify_status"] = "摘要快照·待核实"
+        if oj_fp in seen_old_keys or (oj_uk and oj_uk in seen_old_keys):
+            log("存量重复卡片，已合并: {} | {}".format(oj.get("company"), oj.get("title", "")[:40]))
+            continue
+        seen_old_keys.add(oj_fp)
+        if oj_uk:
+            seen_old_keys.add(oj_uk)
+        cleaned_old.append(oj)
+    old_jobs = cleaned_old
 
     merged_board_jobs = (new_jobs + old_jobs)[:MAX_HISTORY_JOBS]
     save_json_atomic(JOBS_JSON_FILE, {
@@ -896,6 +1214,9 @@ def main():
 
     for j in new_jobs:
         seen_dict[j["id"]] = updated_at_str
+        url_key = make_canonical_url_key(j.get("url"))
+        if url_key:
+            seen_dict[url_key] = updated_at_str
     trimmed_seen = dict(sorted(seen_dict.items(), key=lambda kv: kv[1])[-2000:])
     save_json_atomic(SEEN_FILE, trimmed_seen)
 
