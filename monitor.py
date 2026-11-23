@@ -42,14 +42,14 @@ NON_JOB_DOMAINS = (
     "jianshu.com", "bilibili.com", "oschina.net", "segmentfault.com",
     "github.com", "gitee.com", "baike.baidu.com", "baijiahao.baidu.com",
     "cloud.tencent.com", "aliyun.com/article", "huaweicloud.com/articles",
-    "sohu.com", "163.com", "qq.com", "sina.com.cn", "toutiao.com", "36kr.com",
+    "sohu.com", "163.com", "qq.com", "sina.com.cn", "toutiao.com", "36kr.com", "qbitai.com",
 )
 
 # 教程文章标题词：入池前直接跳过
 ARTICLE_TITLE_KEYWORDS = (
     "全流程", "保姆级", "手把手", "实战教程", "部署教程", "从零开始",
-    "一文读懂", "一文搞定", "最佳实践", "源码解析",
-    "如何部署", "怎么部署", "部署指南", "白皮书", "行业报告",
+    "一文读懂", "一文搞定", "最佳实践", "踩坑", "源码解析",
+    "如何部署", "怎么部署", "部署指南", "配置指南", "白皮书", "行业报告",
 )
 
 # JD 结构锚点词：野生站正文里至少出现一个才算招聘帖，否则当文章页剔除
@@ -136,9 +136,9 @@ SEARCH_PLAN = [
     ("大数据/系统运维", '(site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail) (大数据 OR Hadoop OR Kafka OR 数据平台) 运维 ("北京" OR "天津")', None),
     ("大数据/系统运维", '(site:liepin.com/job OR site:iguopin.com/job/detail) (大数据 OR Hadoop OR Kafka OR 数据平台) 运维 ("北京" OR "天津")', None),
     ("大数据/系统运维", '(site:zhipin.com/job_detail OR 直招 OR 招聘) ("大数据运维" OR "数据平台运维" OR "Hadoop运维") ("北京" OR "天津")', "qdr:m"),
-    ("AI部署/交付运维", '(site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:iguopin.com/job/detail) ("私有化部署" OR "AI交付" OR "大模型运维") ("北京" OR "天津")', None),
-    ("AI部署/交付运维", '(site:liepin.com/job OR site:zhipin.com/job_detail OR site:jobs.feishu.cn OR site:app.mokahr.com) ("私有化部署" OR "AI交付" OR "大模型运维") ("北京" OR "天津")', None),
-    ("AI部署/交付运维", '("私有化部署" OR "大模型交付" OR "AI交付工程师" OR "大模型运维") ("北京" OR "天津") ("岗位职责" OR "任职要求") 招聘 -算法工程师', "qdr:m"),
+    ("AI部署/交付运维", '(site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:iguopin.com/job/detail) ("大模型" OR "私有化部署" OR "AI交付" OR "知识库") (交付 OR 运维 OR 部署) (北京 OR 天津)', None),
+    ("AI部署/交付运维", '(site:liepin.com/job OR site:zhipin.com/job_detail OR site:jobs.feishu.cn OR site:mokahr.com) ("大模型" OR "AI交付" OR "vLLM" OR "Dify" OR "FDE") (交付 OR 运维 OR 部署) (北京 OR 天津)', None),
+    ("AI部署/交付运维", '("大模型交付" OR "AI交付" OR "大模型运维" OR "私有化部署" OR "FDE") ("岗位职责" OR "任职要求") (北京 OR 天津) -外包 -教程 -site:csdn.net -site:zhihu.com -site:juejin.cn', "qdr:m"),
 ]
 
 
@@ -402,15 +402,17 @@ def collect_verified_candidates(serpapi_key):
             if any(kw in title.lower() for kw in EXCLUDED_TITLE_KEYWORDS):
                 continue
 
-            # 教程文章硬过滤（入池前，不占 18 条候选名额）：技术社区/资讯站域名 + 教程标题词
+            # 教程文章硬过滤（入池前，不占 18 条候选名额）：技术社区/资讯站域名一律跳过；
+            # 教程标题词只拦非招聘平台站（平台站上的真招聘帖标题也可能带“全流程”这类词）
             url_lower = url.lower()
-            hit_nonjob = next((d for d in NON_JOB_DOMAINS if d in url_lower), None)
-            if hit_nonjob:
-                log("技术社区/资讯站，已剔除: {} | {}".format(hit_nonjob, title[:40]))
+            if any(d in url_lower for d in NON_JOB_DOMAINS):
+                log("技术社区/资讯站，已剔除: {} | {}".format(
+                    next(d for d in NON_JOB_DOMAINS if d in url_lower), title[:40]))
                 continue
-            hit_article = next((kw for kw in ARTICLE_TITLE_KEYWORDS if kw in title), None)
-            if hit_article:
-                log("教程文章标题词('{}')，已剔除: {}".format(hit_article, title[:40]))
+            is_known_job_site = any(d in url_lower for d in JOB_PLATFORM_DOMAINS)
+            if not is_known_job_site and any(k in title for k in ARTICLE_TITLE_KEYWORDS):
+                log("教程文章标题词('{}')，已剔除: {}".format(
+                    next(k for k in ARTICLE_TITLE_KEYWORDS if k in title), title[:40]))
                 continue
 
             # URL 黑名单：只剔除明显的城市泛列表页/聚合页，不做平台白名单
@@ -561,27 +563,25 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
 - 没有 GPU 集群、RDMA/NCCL、昇腾经验，不会 Go/Java 研发
 
 【范围铁律（严禁模型自加限制！）】
-1. 地域不限区县：北京市全境所有区（含朝阳/海淀/顺义/怀柔/丰台/昌平/亦庄/大兴/通州等）统一记为“北京”，天津市全境所有区统一记为“天津”，绝不因区县丢弃
-2. 甲方不限行业：只要是非外包的企业自招/直招，无论是银行金融、车企制造、农业科技、物流快递、能源国企、医疗零售等任何行业都符合要求，绝不因行业丢弃甲方岗位
-3. 薪资不设上限：40-60K 等高薪岗位绝不可因薪资高或职级高而丢弃！资历要求偏高（如要求 5-10 年大数据运维经验）只如实写进 gap，不丢弃
+1. 地域不限区县：北京市全境所有区（含朝阳/海淀/顺义/怀柔/丰台/昌平/亦庄/大兴/通州等）统一记为"北京"；天津市全境所有区（含南开/西青/滨海/武清等）统一记为"天津"。严禁以远郊区县或"非核心地点"为由丢弃！
+2. 甲方不限行业：只要是非外包的企业自招/直招，无论是银行金融、车企制造、农业科技、物流快递、能源国企、医疗零售还是互联网，一律平等保留！严禁以行业不符为由丢弃！
+3. 薪资不设上限：40-60K 等高薪岗位绝不可因薪资高或职级高而丢弃！资历要求偏高（如要求5-10年大数据经验）一律保留并在 gap 中注明。
 
 【仅允许的 6 类淘汰码（drop_code）】
 只有命中以下 6 条之一的候选才能判为 "drop"，未命中任何一条的必须判为 "keep"：
 - OUTSOURCE_OR_RPO：IT外包、金融/运营商驻场乙方、劳务派遣、华为OD、猎头匿名代招（无真实甲方企业名）
 - NOT_JOB_POST：技术教程/科普文章、城市职位汇总列表页、无具体公司名、或明确已停止招聘
 - WRONG_CITY：工作城市既不在北京（含下辖各区）、也不在天津（含下辖各区）、也不是远程
-- PURE_DEV_OR_NON_OPS：纯Java/Go/C++/前端研发、算法工程师、要求重度Go/Java编码的运维平台开发岗、数据标注/数据运营等非运维岗
-- HPC_GPU_CLUSTER：纯千卡智算中心底座、RDMA/InfiniBand/NCCL训练集群组网岗（注意：大模型私有化交付不算，几台GPU服务器上用Docker/vLLM做模型推理私有化交付的保留）
-- LLM_5Y_EXP：明确硬性要求 5 年以上大模型或智算从业经验（注意：要求 5 年以上传统Linux/Hadoop大数据运维经验不算，只限大模型/智算）
-- company 栏填的是招聘平台名或带“备注”的说明（如智联、猎聘、BOSS直聘、前程无忧、国聘、智联招聘、备注等），不是真实直招企业名——查不到真实企业名就直接丢弃，绝不输出（按 NOT_JOB_POST 计）
-- 当 `webpage_excerpt` 为空（登录墙/安全验证导致没读到正文）时，允许从 `search_title` 或 `snippet` 里的企业署名提取真实公司名（如标题后缀“大数据运维_北京某科技-猎聘”里的“某科技”）；只有当标题和摘要里完全只有“猎聘/智联/某知名企业”且无任何真实字号时，才丢弃该条
+- PURE_DEV_OR_NON_OPS：纯Java/Go/C++/前端研发、算法工程师、要求重度Go/Java编码的运维平台开发岗、数据运营/数据标注岗
+- HPC_GPU_CLUSTER：纯千卡智算中心底座、RDMA/InfiniBand/NCCL训练集群组网岗（注意：大模型私有化部署/AI交付/FDE/RAG实施必须保留！）
+- LLM_5Y_EXP：明确硬性要求 5 年以上大模型或智算从业经验（注意：要求5年以上传统Linux/Hadoop大数据经验不在此列，应保留！）
 
 【真实性铁律】
 - 只能基于提供的候选数据提取，严禁编造公司名、薪资或要求。
 - 如果 `webpage_excerpt` 为空（登录墙导致没读到正文），优先从 `search_title`/`snippet` 的企业署名里提取真实公司名；只有标题和摘要里完全只有平台名或“某知名企业”且无任何真实字号时，才丢弃该条。
 - 如果 `verify_status` 为 "搜索摘要核验" 且摘要里没写薪资或细节，必须如实把 `salary` 填为 "未知"，并在 `gap` 中注明 "正文受登录墙限制，需点开核对完整JD"。
 - 只输出合法的 JSON 数组，不要任何多余解释。数组必须包含输入中每一个 source_id 的判定，严禁遗漏任何一条（拿不准也不许跳过）：
-  - 若丢弃：{{"source_id": 1, "decision": "drop", "drop_code": "上面 6 个淘汰码之一（必填，只能填这 6 个，填别的码无效）", "reason": "一句话具体原因（20字内，必须写明该页实际在招什么或命中了哪条红线，如：主帖实为算法工程师、大模型交付仅为底部推荐词、要求RDMA千卡组网）。严禁写“与目标方向不符”“与目标行业不符”这种模糊套话"}}
+  - 若丢弃：{{"source_id": 1, "decision": "drop", "drop_code": "必须严格填写上述6个枚举码之一", "reason": "一句话事实依据"}}
   - 若保留：{{"source_id": 2, "decision": "keep", "title": "原帖准确岗位名称（不要把标题和正文里的不同叫法拼在一起）", "company": "准确公司名称（正文为空时可从标题/摘要的企业署名提取；只有标题和摘要里完全只有平台名或“某知名企业”且无任何真实字号时才丢弃该条）", "city": "北京 或 天津 或 远程", "salary": "真实薪资范围 或 未知", "date": "发布时间如 2026-11-22 或 近期 或 未知", "match": "一句话说明与求职者画像的匹配点", "gap": "一句话说明岗位要求中求职者尚不具备的技能差距"}}
 - 若全部不符合，也要逐条输出 drop 判定，不要只输出 []。
 
@@ -625,18 +625,13 @@ def filter_with_gemini(api_key, model_names, track_label, candidates, today_str)
             continue
 
         orig = id_map[sid]
-        # 丢弃审计日志：模型必须对每条候选输出判定，drop 的原因打进日志，黑盒才能打开
-        if item.get("decision") == "drop":
-            code = str(item.get("drop_code") or "").strip().upper()
-            if code not in ALLOWED_DROP_CODES:
-                # 非法拒信：模型自编了淘汰理由，判定无效，按 keep 继续走 Python 终审
-                # （标题/公司/城市/外包词仍会拦；选不出合法码就必须 keep）
-                log("[INVALID_CODE #{}] 非法淘汰码: {} | 原因: {} | 原标题: {}".format(
-                    sid, code or "缺失", str(item.get("reason") or "未说明")[:40], orig["title"][:40]))
-            else:
-                log("[DROP #{}][{}] 原因: {} | 原标题: {} | {}".format(
-                    sid, code, str(item.get("reason") or "未说明")[:40], orig["title"][:40], orig["url"][:60]))
-                continue
+        # 丢弃审计日志：非 keep 一律丢弃，淘汰码原样打进日志（缺码记 INVALID_CODE，编造的码也会原样现形）
+        if item.get("decision") != "keep":
+            d_code = str(item.get("drop_code") or "INVALID_CODE").strip()
+            log("[DROP #{}][{}][{}] {} | 原标题: {}".format(
+                sid, d_code, orig["verify_status"], item.get("reason", ""), orig["title"][:45]
+            ))
+            continue
         title = str(item.get("title") or "").strip()
         company = str(item.get("company") or "").strip()
         city = str(item.get("city") or "").strip()
