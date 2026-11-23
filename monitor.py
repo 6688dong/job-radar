@@ -208,13 +208,16 @@ LIST_URL_BLACKLIST = (
 # 每项独立配置 tbs：锁定详情页路径的查询不限时间（智联/国聘详情页在 Google 无时间戳，qdr:m 会误杀 90% 在招页，下架页靠正文检测拦截）；
 # 宽泛搜索保留 qdr:m 防陈旧列表页。每条查询控制在 20 个词以内，每条只放 1～2 个 site:。
 # SEARCH_PLAN 每项为 (方向, 查询词, tbs)，tbs 为 None 表示不限时间
+# 第七轮后续（Gemini 结论）：智联在当前架构下是结构性死锁——qdr:m 下 0 条（详情页无发布时间元数据）、
+# tbs=None 下抓不到正文会被预检全清；故放弃 site:zhaopin.com 专属查询，6 条查询按“能否直抓原网页”重新对齐：
+# 猎聘/国聘（可直抓正文）配 tbs=None；BOSS/飞书/Moka/字节官网（登录墙/前端渲染、带 Google 时间戳）配 tbs="qdr:m"
 SEARCH_PLAN = [
-    ("大数据/系统运维", '(site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail) (大数据 OR Hadoop OR Kafka OR 数据平台) 运维 ("北京" OR "天津")', "qdr:m"),
-    ("大数据/系统运维", '(site:liepin.com/job OR site:iguopin.com/job/detail) (大数据 OR Hadoop OR Kafka OR 数据平台) 运维 ("北京" OR "天津")', None),
-    ("大数据/系统运维", '(site:zhipin.com/job_detail OR 直招 OR 招聘) ("大数据运维" OR "数据平台运维" OR "Hadoop运维") ("北京" OR "天津")', "qdr:m"),
-    ("AI部署/交付运维", '(site:jobs.zhaopin.com OR site:zhaopin.com/jobdetail OR site:iguopin.com/job/detail) ("大模型" OR "私有化部署" OR "AI交付" OR "知识库") (交付 OR 运维 OR 部署) (北京 OR 天津)', "qdr:m"),
-    ("AI部署/交付运维", '(site:liepin.com/job OR site:zhipin.com/job_detail OR site:jobs.feishu.cn OR site:mokahr.com) ("大模型" OR "AI交付" OR "vLLM" OR "Dify" OR "FDE") (交付 OR 运维 OR 部署) (北京 OR 天津)', None),
-    ("AI部署/交付运维", '("大模型交付" OR "AI交付" OR "大模型运维" OR "私有化部署" OR "FDE") ("岗位职责" OR "任职要求") (北京 OR 天津) -外包 -教程 -site:csdn.net -site:zhihu.com -site:juejin.cn -site:jobui.com -site:kanzhun.com -inurl:zhaopin/', "qdr:m"),
+    ("大数据/系统运维", 'site:liepin.com/job (大数据 OR Hadoop OR Hive OR Kafka OR 数据平台) 运维 (北京 OR 天津)', None),
+    ("大数据/系统运维", 'site:iguopin.com/job/detail (大数据 OR 数据平台 OR K8s OR 容器 OR Linux) 运维 (北京 OR 天津)', None),
+    ("大数据/系统运维", '(site:zhipin.com/job_detail OR site:jobs.bytedance.com OR 直招 OR 招聘) ("大数据运维" OR "数据平台运维" OR "Hadoop运维" OR "SRE") (北京 OR 天津) -外包 -驻场', "qdr:m"),
+    ("AI部署/交付运维", '(site:liepin.com/job OR site:iguopin.com/job/detail) ("大模型" OR "私有化部署" OR "AI交付" OR "知识库" OR "FDE") (交付 OR 运维 OR 部署) (北京 OR 天津)', None),
+    ("AI部署/交付运维", '(site:zhipin.com/job_detail OR site:jobs.feishu.cn OR site:mokahr.com OR site:jobs.bytedance.com) ("大模型" OR "AI交付" OR "vLLM" OR "Dify" OR "FDE") (交付 OR 运维 OR 部署) (北京 OR 天津)', "qdr:m"),
+    ("AI部署/交付运维", '("大模型交付" OR "AI交付" OR "大模型运维" OR "私有化部署" OR "FDE") ("岗位职责" OR "任职要求") (北京 OR 天津) -外包 -教程 -site:csdn.net -site:zhihu.com -site:juejin.cn -site:jobui.com -site:kanzhun.com', "qdr:m"),
 ]
 
 
@@ -329,13 +332,21 @@ def search_serpapi(serpapi_key, query, tbs="qdr:m"):
     return data.get("organic_results") or []
 
 
+# 洗掉的追踪参数前缀：字节等站点的 recomId/sourceJobId 也要洗，否则同一职位因推荐参数不同被当成两条
+STRIP_QUERY_PREFIXES = ("utm_", "spm", "ka", "pgref", "recomid", "sourcejobid", "scene", "from")
+
+
 def normalize_url(u):
     u = str(u or "").strip()
     if not u.startswith(("http://", "https://")):
         return ""
     parsed = urllib.parse.urlsplit(u)
     clean_q = urllib.parse.urlencode(
-        [(k, v) for k, v in urllib.parse.parse_qsl(parsed.query) if not k.lower().startswith(("utm_", "spm", "ka", "pgref"))]
+        [
+            (k, v)
+            for k, v in urllib.parse.parse_qsl(parsed.query)
+            if not k.lower().strip().startswith(STRIP_QUERY_PREFIXES)
+        ]
     )
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, clean_q, ""))
 
@@ -487,7 +498,7 @@ def fetch_and_verify_candidate(item):
 
 def collect_verified_candidates(serpapi_key):
     grouped = {"大数据/系统运维": [], "AI部署/交付运维": []}
-    seen_urls = set()
+    seen_keys = set()
 
     for track, q, tbs in SEARCH_PLAN:
         log("SerpApi 检索 [{}]: {}".format(track, q[:48]))
@@ -511,7 +522,13 @@ def collect_verified_candidates(serpapi_key):
             title = str(r.get("title") or "").strip()
             snippet = str(r.get("snippet") or "").strip()
             date_hint = str(r.get("date") or "").strip()
-            if not url or not title or url in seen_urls:
+            # 第七轮后续：收集阶段前置去重——规范职位键 + goto 兜底签名双保险。
+            # 同一职位在不同查询下可能 URL 形态不同（字节 PC/移动端、推荐参数）或 goto 密文不同，
+            # 只靠原始 URL 字符串去重拦不住，会白占每赛道 18 条候选名额
+            url_key = make_canonical_url_key(url) or url
+            title_norm = re.sub(r"\s+", "", title.lower())
+            goto_sig = "goto:{}|{}".format(title_norm, disp_norm) if "google.com/goto" in url else ""
+            if not url or not title or url_key in seen_keys or (goto_sig and goto_sig in seen_keys):
                 continue
 
             pre_check = strip_safe_words(title + " " + snippet)
@@ -547,7 +564,9 @@ def collect_verified_candidates(serpapi_key):
                 log("泛列表页 URL，已剔除: {}".format(url[:80]))
                 continue
 
-            seen_urls.add(url)
+            seen_keys.add(url_key)
+            if goto_sig:
+                seen_keys.add(goto_sig)
             grouped[track].append({
                 "track": track,
                 "url": url,
@@ -941,6 +960,9 @@ def make_canonical_url_key(url):
     m_gp = re.search(r"iguopin\.com/job/detail\?id=(\d+)", u)
     if m_gp:
         return "url:iguopin:" + m_gp.group(1)
+    m_bd = re.search(r"jobs\.bytedance\.com/(?:experienced/)?(?:m/)?position/(?:detail/)?(\d+)", u)
+    if m_bd:
+        return "url:bytedance:" + m_bd.group(1)
     parsed = urllib.parse.urlsplit(u.lower())
     host = re.sub(r"^m\.", "www.", parsed.netloc)
     return "url:{}://{}{}".format("https", host, parsed.path.rstrip("/"))
