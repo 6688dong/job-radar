@@ -1,9 +1,37 @@
 {
-  "updated_at": "2026-11-27 00:38:28",
-  "latest_date": "2026-11-27",
-  "today_new_count": 4,
+  "updated_at": "2026-11-28 00:24:02",
+  "latest_date": "2026-11-28",
+  "today_new_count": 2,
   "model": "gemini-3.5-flash-lite",
   "jobs": [
+    {
+      "title": "大模型系统运维工程师",
+      "company": "因诺(上海)资产管理有限公司",
+      "city": "北京",
+      "salary": "30-50k·16薪",
+      "date": "近期",
+      "url": "https://www.liepin.com/job/1980990797.shtml",
+      "verify_status": "原网页已核验",
+      "track": "AI部署/交付运维",
+      "match": "具备Linux/Docker/K8s基础设施运维能力，契合开源大模型本地化部署与运维需求，金融资管甲方自招。",
+      "gap": "量化私募背景对系统稳定性要求极高，需具备扎实的故障排查与监控体系建设经验。",
+      "added_date": "2026-11-28",
+      "id": "因诺(上海)资产管理|大模型系统运维工程师|北京"
+    },
+    {
+      "title": "医院智能体现场交付工程师（FDE）",
+      "company": "维玄(北京)健康技术有限公司",
+      "city": "北京",
+      "salary": "20-30k",
+      "date": "2026-11-27",
+      "url": "https://www.liepin.com/job/1987036059.shtml",
+      "verify_status": "原网页已核验",
+      "track": "AI部署/交付运维",
+      "match": "契合私有化机房部署、Linux/K8s/Docker基础及AI大模型/智能体交付要求，企业直招。",
+      "gap": "需要具备医疗行业（如HIS/EMR系统对接）现场实施经验。",
+      "added_date": "2026-11-28",
+      "id": "维玄健康技术|医院智能体现场交付工程师fde|北京"
+    },
     {
       "title": "初级运维工程师（实习生，北京）",
       "company": "凯通科技股份有限公司",
