@@ -1,9 +1,23 @@
 {
-  "updated_at": "2026-11-28 00:24:02",
+  "updated_at": "2026-11-28 23:16:21",
   "latest_date": "2026-11-28",
-  "today_new_count": 2,
+  "today_new_count": 1,
   "model": "gemini-3.5-flash-lite",
   "jobs": [
+    {
+      "title": "数据库运维工程师",
+      "company": "云听",
+      "city": "北京",
+      "salary": "15-20k·13薪",
+      "date": "近期",
+      "url": "https://www.liepin.com/job/1984872001.shtml",
+      "verify_status": "原网页已核验",
+      "track": "大数据/系统运维",
+      "match": "熟悉Linux/Unix操作系统，掌握Shell/Python脚本编写，具备数据库集群监控及自动化改进经验",
+      "gap": "主要偏向MySQL/MongoDB/Redis等数据库运维，大数据组件运维经验需平移",
+      "added_date": "2026-11-28",
+      "id": "云听|数据库运维工程师|北京"
+    },
     {
       "title": "大模型系统运维工程师",
       "company": "因诺(上海)资产管理有限公司",
